@@ -8,7 +8,7 @@ import os
 import sys
 sys.path.insert(1, '../')
 
-from pypka import Titration, getTitrableSites
+from pypka.pypka import Titration, getTitrableSites
 
 app = Flask(__name__)
 CORS(app, resources={r'/*': {'origins': '*'}})
@@ -179,7 +179,7 @@ def get_file(path):
     elif ftype == 'mdpdb':
         pass
 
-    fname = 'cona'
+    fname = 'test_file'
     return send_file(fname, cache_timeout=36000)
 
 @app.route('/getLatestsSubmissions', methods=['POST'])
