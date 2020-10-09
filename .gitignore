@@ -1,0 +1,5 @@
+*.out
+submissions/*
+subs.txt
+LOG
+__pycache__

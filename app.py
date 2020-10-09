@@ -1,12 +1,9 @@
-from flask import Flask, render_template, jsonify, request, send_file
+from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
 from pprint import pprint, pformat
 import datetime
-
 import os
-import sys
-sys.path.insert(1, '../')
 
 from pypka.pypka import Titration, getTitrableSites
 
@@ -112,12 +109,12 @@ def submitCalculation():
         'ncpus'         : -1,
         'clean': True,
         'ser_thr_titration': False,
-        'titration_output': 'titration_{0}.out'.format(subID),
-        'output'        : 'pKas_{0}.out'.format(subID)
+        'titration_output': 'titrations/titration_{0}.out'.format(subID),
+        'output'        : 'pkas/pKas_{0}.out'.format(subID)
     }
     
     if outputfile:
-        parameters['structure_output'] = ('out_{0}.pdb'.format(subID), outputfilepH, outputfilenaming)
+        parameters['structure_output'] = ('pdbs_out/out_{0}.pdb'.format(subID), outputfilepH, outputfilenaming)
 
     pprint(parameters)
 
@@ -162,6 +159,8 @@ def submitCalculation():
         f_new.write('{0} {1}\n'.format(subID, datetime.datetime.today()))
     with open('submissions/{0}'.format(subID), 'w') as f_new:
         f_new.write(pformat(response_dict))
+
+    # send_email(email)
 
     return response
 
