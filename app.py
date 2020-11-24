@@ -1,14 +1,16 @@
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
-
+from mailjet_rest import Client
 from pprint import pprint, pformat
 import datetime
 import os
 
 from pypka.pypka import Titration, getTitrableSites
+import db
 
 app = Flask(__name__)
 CORS(app, resources={r'/*': {'origins': '*'}})
+CONN, CUR = db.db_connect()
 
 def save_pdb(pdbfile, subID):
     def new_name(subID):
@@ -85,6 +87,8 @@ def submitCalculation():
     outputfile       = request.json['outputfile']
     outputfilenaming = request.json['outputNamingScheme']
     outputfilepH     = request.json['outputFilepH']
+    #TODO request email to front-end
+    outputemail = request.json['outputemail']
 
     subID   = request.json['subID']
 
@@ -155,12 +159,45 @@ def submitCalculation():
     response = jsonify(response_dict)
     response.headers.add('Access-Control-Allow-Origin', '*')
 
+
+    cur_date = datetime.datetime.today()
     with open("subs.txt", 'a') as f_new:
-        f_new.write('{0} {1}\n'.format(subID, datetime.datetime.today()))
+        f_new.write('{0} {1}\n'.format(subID, cur_date))
     with open('submissions/{0}'.format(subID), 'w') as f_new:
         f_new.write(pformat(response_dict))
 
-    # send_email(email)
+    db.insert_new_submission(CONN, CUR, cur_date, response_dict)
+
+    #TODO send_email(email)
+    def send_email(email)
+
+    api_key = os.environ['MJ_APIKEY_PUBLIC']
+    api_secret = os.environ['MJ_APIKEY_PRIVATE']
+    mailjet = Client(auth=(api_key, api_secret), version='v3.1')
+    data = {
+      'Messages': [
+        {
+            "From": {
+                "Email": "$SENDER_EMAIL",
+                "Name": "PypKa"
+            },
+            "To": [
+                {
+                    "Email": email,
+                    "Name": "User"
+                }
+                ],
+                "Subject": "My first Mailjet Email!",
+                "TextPart": "Greetings from Mailjet!",
+                "HTMLPart": "<h3>Dear passenger 1, welcome to <a href=\"https://www.mailjet.com/\">Mailjet</a>!</h3><br />May the delivery force be with you!"
+            }
+        ]
+    }
+    result = mailjet.send.create(data=data)
+    
+    #temos de criar um email
+    #criar um html que va diretamente para os nossos dados
+    #criar uma autenticação para o api
 
     return response
 
