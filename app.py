@@ -1,16 +1,18 @@
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
-from mailjet_rest import Client
+
 from pprint import pprint, pformat
 import datetime
 import os
+import smtplib
+import passemail
 
 from pypka.pypka import Titration, getTitrableSites
-import db
+#import db
 
 app = Flask(__name__)
 CORS(app, resources={r'/*': {'origins': '*'}})
-CONN, CUR = db.db_connect()
+#CONN, CUR = db.db_connect()
 
 def save_pdb(pdbfile, subID):
     def new_name(subID):
@@ -88,7 +90,7 @@ def submitCalculation():
     outputfilenaming = request.json['outputNamingScheme']
     outputfilepH     = request.json['outputFilepH']
     #TODO request email to front-end
-    outputemail = request.json['outputemail']
+    outputemail = request.json['email']
 
     subID   = request.json['subID']
 
@@ -166,35 +168,38 @@ def submitCalculation():
     with open('submissions/{0}'.format(subID), 'w') as f_new:
         f_new.write(pformat(response_dict))
 
-    db.insert_new_submission(CONN, CUR, cur_date, response_dict)
-
-    #TODO send_email(email)
-    def send_email(email)
-
-    api_key = os.environ['MJ_APIKEY_PUBLIC']
-    api_secret = os.environ['MJ_APIKEY_PRIVATE']
-    mailjet = Client(auth=(api_key, api_secret), version='v3.1')
-    data = {
-      'Messages': [
-        {
-            "From": {
-                "Email": "$SENDER_EMAIL",
-                "Name": "PypKa"
-            },
-            "To": [
-                {
-                    "Email": email,
-                    "Name": "User"
-                }
-                ],
-                "Subject": "My first Mailjet Email!",
-                "TextPart": "Greetings from Mailjet!",
-                "HTMLPart": "<h3>Dear passenger 1, welcome to <a href=\"https://www.mailjet.com/\">Mailjet</a>!</h3><br />May the delivery force be with you!"
-            }
-        ]
-    }
-    result = mailjet.send.create(data=data)
+    #db.insert_new_submission(CONN, CUR, cur_date, response_dict)
     
+    #TODO send_email(email) 
+#def send_email(outputemail):
+    gmail_user = passemail.EMAIL
+    gmail_password = passemail.PASS
+
+    sent_from = gmail_user
+    to = outputemail
+    subject = 'PypKa'
+    body = 'Hey, whats up?\n\n- You'
+
+    email_text = """\
+    From: %s
+    To: %s
+    Subject: %s
+
+    %s
+    """ % (sent_from, ", ".join(to), subject, body)
+
+    try:
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        server.ehlo()
+        server.login(gmail_user, gmail_password)
+        server.sendmail(sent_from, to, email_text)
+        server.close()
+
+        print ('Email sent!')
+    except:
+        print ('Something went wrong...')
+
+#send_email(outputemail)
     #temos de criar um email
     #criar um html que va diretamente para os nossos dados
     #criar uma autenticação para o api

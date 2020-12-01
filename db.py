@@ -37,12 +37,12 @@ RETURNING protein_id;
 
     sql_query = f"""
 INSERT INTO Residues(protein_id, pka, res_name)
-VALUES ({proteinID}, {pKs}, {res_name})
+VALUES ({proteinID}, {pKas}, {res_name})
 """
 
     sql_query = f"""
 INSERT INTO Set(job_id, pb_set, mc_set, pypka_set)
-VALUES ({jobID}, {pb_set}, {mc_set}, {pypka_set});
+VALUES ({jobID}, {pb_set}, {mcsteps}, {pypka_set});
 """
 #perguntar ao pedro onde estão mc_set  as variaveis
 
