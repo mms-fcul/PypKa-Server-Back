@@ -1,5 +1,10 @@
 *.out
+*.pdb
 submissions/*
+pkas/*
+pdb/*
+titrations/*
 subs.txt
-LOG
+LOG*
 __pycache__
+passemail.py
