@@ -6,7 +6,7 @@ import datetime
 import os
 import smtplib
 import requests
-from decouple import config
+from dotenv import dotenv_values
 
 from pypka.pypka import Titration, getTitrableSites
 
@@ -15,6 +15,8 @@ from pypka.pypka import Titration, getTitrableSites
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 # CONN, CUR = db.db_connect()
+
+config = dotenv_values(".env")
 
 
 @app.route("/")
@@ -90,6 +92,40 @@ def run_pypka(parameters):
     }
 
     return response_dict
+
+
+def send_email(outputemail):
+    gmail_user = config["EMAIL"]
+    gmail_password = config["PASS"]
+
+    sent_from = gmail_user
+    to = outputemail
+    subject = "PypKa"
+    body = "Hey, whats up?\n\n- You"
+
+    email_text = """\
+    From: %s
+    To: %s
+    Subject: %s
+
+    %s
+    """ % (
+        sent_from,
+        ", ".join(to),
+        subject,
+        body,
+    )
+
+    try:
+        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        server.ehlo()
+        server.login(gmail_user, gmail_password)
+        server.sendmail(sent_from, to, email_text)
+        server.close()
+
+        print("Email sent!")
+    except:
+        print("Something went wrong...")
 
 
 def save_pdb(pdbfile, subID):
@@ -226,44 +262,10 @@ def submitCalculation():
 
     # db.insert_new_submission(CONN, CUR, cur_date, response_dict)
 
-    # TODO send_email(email)
-    # def send_email(outputemail):
-    gmail_user = config("EMAIL")
-    gmail_password = config("PASS")
+    if outputemail:
+        send_email(outputemail)
 
-    sent_from = gmail_user
-    to = outputemail
-    subject = "PypKa"
-    body = "Hey, whats up?\n\n- You"
-
-    email_text = """\
-    From: %s
-    To: %s
-    Subject: %s
-
-    %s
-    """ % (
-        sent_from,
-        ", ".join(to),
-        subject,
-        body,
-    )
-
-    try:
-        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
-        server.ehlo()
-        server.login(gmail_user, gmail_password)
-        server.sendmail(sent_from, to, email_text)
-        server.close()
-
-        print("Email sent!")
-    except:
-        print("Something went wrong...")
-
-    # send_email(outputemail)
-    # temos de criar um email
-    # criar um html que va diretamente para os nossos dados
-    # criar uma autenticação para o api
+    # TODO: criar uma autenticação para o api
 
     return response
 
@@ -299,3 +301,4 @@ def getLatestsSubmissions():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0")
+    #app.run(host="127.0.0.1")
