@@ -1,9 +1,5 @@
 *.out
 *.pdb
-submissions/*
-pkas/*
-pdb/*
-titrations/*
 subs.txt
 LOG*
 __pycache__
