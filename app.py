@@ -6,6 +6,7 @@ import datetime
 import os
 import smtplib
 import passemail
+<<<<<<< HEAD
 import requests
 
 from pypka.pypka import Titration, getTitrableSites
@@ -91,6 +92,15 @@ def run_pypka(parameters):
 
     return response_dict
 
+=======
+
+from pypka.pypka import Titration, getTitrableSites
+#import db
+
+app = Flask(__name__)
+CORS(app, resources={r'/*': {'origins': '*'}})
+#CONN, CUR = db.db_connect()
+>>>>>>> b146c609ca81b2c549f9a8670f58ca85a7a52818
 
 def save_pdb(pdbfile, subID):
     def new_name(subID):
@@ -153,6 +163,7 @@ def getSubID():
 @app.route("/submitSim", methods=["POST"])
 def submitCalculation():
 
+<<<<<<< HEAD
     pdbfile = request.json["pdb"]
     input_naming_scheme = request.json["inputNamingScheme"]
 
@@ -172,6 +183,27 @@ def submitCalculation():
     outputemail = request.json["email"]
 
     subID = request.json["subID"]
+=======
+    pdbfile = request.json['pdb']
+    input_naming_scheme = request.json['inputNamingScheme']
+    
+    pHmin   = request.json['pHmin']
+    pHmax   = request.json['pHmax']
+    pHstep  = request.json['pHstep']
+    
+    epsin   = request.json['epsin']
+    epsout  = request.json['epsout']
+    ionic   = request.json['ionic']
+
+    outputpKs        = request.json['outputpKs']
+    outputfile       = request.json['outputfile']
+    outputfilenaming = request.json['outputNamingScheme']
+    outputfilepH     = request.json['outputFilepH']
+    #TODO request email to front-end
+    outputemail = request.json['email']
+
+    subID   = request.json['subID']
+>>>>>>> b146c609ca81b2c549f9a8670f58ca85a7a52818
 
     newfilename = save_pdb(pdbfile, subID)
 
@@ -224,17 +256,29 @@ def submitCalculation():
     with open("submissions/{0}".format(subID), "w") as f_new:
         f_new.write(pformat(response_dict))
 
+<<<<<<< HEAD
     # db.insert_new_submission(CONN, CUR, cur_date, response_dict)
 
     # TODO send_email(email)
     # def send_email(outputemail):
+=======
+    #db.insert_new_submission(CONN, CUR, cur_date, response_dict)
+    
+    #TODO send_email(email) 
+#def send_email(outputemail):
+>>>>>>> b146c609ca81b2c549f9a8670f58ca85a7a52818
     gmail_user = passemail.EMAIL
     gmail_password = passemail.PASS
 
     sent_from = gmail_user
     to = outputemail
+<<<<<<< HEAD
     subject = "PypKa"
     body = "Hey, whats up?\n\n- You"
+=======
+    subject = 'PypKa'
+    body = 'Hey, whats up?\n\n- You'
+>>>>>>> b146c609ca81b2c549f9a8670f58ca85a7a52818
 
     email_text = """\
     From: %s
@@ -242,6 +286,7 @@ def submitCalculation():
     Subject: %s
 
     %s
+<<<<<<< HEAD
     """ % (
         sent_from,
         ", ".join(to),
@@ -251,11 +296,18 @@ def submitCalculation():
 
     try:
         server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+=======
+    """ % (sent_from, ", ".join(to), subject, body)
+
+    try:
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+>>>>>>> b146c609ca81b2c549f9a8670f58ca85a7a52818
         server.ehlo()
         server.login(gmail_user, gmail_password)
         server.sendmail(sent_from, to, email_text)
         server.close()
 
+<<<<<<< HEAD
         print("Email sent!")
     except:
         print("Something went wrong...")
@@ -264,6 +316,16 @@ def submitCalculation():
     # temos de criar um email
     # criar um html que va diretamente para os nossos dados
     # criar uma autenticação para o api
+=======
+        print ('Email sent!')
+    except:
+        print ('Something went wrong...')
+
+#send_email(outputemail)
+    #temos de criar um email
+    #criar um html que va diretamente para os nossos dados
+    #criar uma autenticação para o api
+>>>>>>> b146c609ca81b2c549f9a8670f58ca85a7a52818
 
     return response
 
