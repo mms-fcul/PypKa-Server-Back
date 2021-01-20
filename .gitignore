@@ -4,3 +4,4 @@ subs.txt
 LOG*
 __pycache__
 passemail.py
+.env
