@@ -204,7 +204,7 @@ def submitCalculation():
     outputfile = request.json["outputfile"]
     outputfilenaming = request.json["outputNamingScheme"]
     outputfilepH = request.json["outputFilepH"]
-    # TODO request email to front-end
+
     outputemail = request.json["email"]
 
     subID = request.json["subID"]
@@ -265,20 +265,18 @@ def submitCalculation():
     if outputemail:
         send_email(outputemail)
 
-    # TODO: criar uma autenticação para o api
-
     return response
+
 
 @app.route("/getSubmissions", methods=["GET"])
 def get_submission():
-    #id=cur.lastrowid()
-    sql = "SELECT * FROM Job ORDER BY job_id DESC"
-    submission_IDS  = db.executeSingleSQLstatement(CUR, sql)
+    sql = "SELECT job_id FROM Job ORDER BY job_id DESC"
+    submission_IDS = db.executeSingleSQLstatement(CUR, sql, fetchall=True)
 
     response = jsonify(submission_IDS)
     response.headers.add("Access-Control-Allow-Origin", "*")
     return response
-    
+
 
 @app.route("/getFile", methods=["POST"])
 def get_file(path):
@@ -310,5 +308,5 @@ def getLatestsSubmissions():
 
 
 if __name__ == "__main__":
-    #app.run(host="0.0.0.0")
-    app.run(host="127.0.0.1")
+    app.run(host="0.0.0.0")
+    # app.run(host="127.0.0.1")
