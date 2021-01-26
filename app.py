@@ -1,6 +1,6 @@
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
-
+import hashlib
 from pprint import pprint, pformat
 import datetime
 import os
@@ -10,11 +10,11 @@ from dotenv import dotenv_values
 
 from pypka.pypka import Titration, getTitrableSites
 
-# import db
+import db
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
-# CONN, CUR = db.db_connect()
+CONN, CUR = db.db_connect()
 
 config = dotenv_values(".env")
 
@@ -260,7 +260,7 @@ def submitCalculation():
     with open("submissions/{0}".format(subID), "w") as f_new:
         f_new.write(pformat(response_dict))
 
-    # db.insert_new_submission(CONN, CUR, cur_date, response_dict)
+    db.insert_new_submission(CONN, CUR, cur_date, response_dict)
 
     if outputemail:
         send_email(outputemail)
@@ -269,6 +269,16 @@ def submitCalculation():
 
     return response
 
+@app.route("/getSubmissions", methods=["GET"])
+def get_submission():
+    #id=cur.lastrowid()
+    sql = "SELECT * FROM Job ORDER BY job_id DESC"
+    submission_IDS  = db.executeSingleSQLstatement(CUR, sql)
+
+    response = jsonify(submission_IDS)
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
+    
 
 @app.route("/getFile", methods=["POST"])
 def get_file(path):
@@ -300,5 +310,5 @@ def getLatestsSubmissions():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0")
-    #app.run(host="127.0.0.1")
+    #app.run(host="0.0.0.0")
+    app.run(host="127.0.0.1")

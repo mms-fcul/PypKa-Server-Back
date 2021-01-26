@@ -24,7 +24,8 @@ def executeSingleSQLstatement(cur, sql, fetchall=False, commit=False):
         cur.execute(sql)
         results = None
     else:
-        results = cur.execute(sql).fetchall()
+        results = cur.execute(sql)
+        results = cur.fetchall()
     if commit:
         conn.commit()
     return results
