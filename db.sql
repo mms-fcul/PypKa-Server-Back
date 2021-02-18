@@ -1,10 +1,10 @@
 
 CREATE TABLE protein (
-    protein_id serial PRIMARY KEY,
+    protein_id serial,
     pdb_code character(4),
-    pdb_file text NOT NULL,
-    UNIQUE (pdb_code),
-    UNIQUE (pdb_file)
+    pdb_file json NOT NULL,
+    PRIMARY KEY (protein_id),
+    UNIQUE (pdb_code)
 );
 
 CREATE TABLE job (
@@ -30,7 +30,7 @@ CREATE TABLE results (
     results_id serial,
     job_id integer,
     tit_curve json,
-    pdb_out text,
+    pdb_out json,
     error text,
     PRIMARY KEY (job_id),
     FOREIGN KEY (job_id) REFERENCES job(job_id)
