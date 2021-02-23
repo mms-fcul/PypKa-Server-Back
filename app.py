@@ -280,13 +280,17 @@ def submitCalculation():
     return response
 
 
-@app.route("/getSubmissions", methods=["GET"])
+@app.route("/getSubmissions", methods=["POST"])
 def get_submission():
     sql = "SELECT job_id FROM Job ORDER BY job_id DESC"
     submission_IDS = db.executeSingleSQLstatement(CONN, CUR, sql, fetchall=True)
 
     response = jsonify(submission_IDS)
     response.headers.add("Access-Control-Allow-Origin", "*")
+    
+    #TODO: get job_id, protein_name, submission_datetime, pdb_out exists? bolean
+    #TODO: fix 1qyv insertion error    
+
     return response
 
 
@@ -295,6 +299,9 @@ def get_file(path):
     subID = request.json["subID"]
     ftype = request.json["ftype"]
 
+    #TODO: get correct variable from the database
+
+    #TODO: format the variable accordingly to download as file
     if ftype == "titration":
         pass
     elif ftype == "parameters":
@@ -306,17 +313,6 @@ def get_file(path):
 
     fname = "test_file"
     return send_file(fname, cache_timeout=36000)
-
-
-@app.route("/getLatestsSubmissions", methods=["POST"])
-def getLatestsSubmissions():
-
-    response_dict = {}
-
-    response = jsonify(response_dict)
-    response.headers.add("Access-Control-Allow-Origin", "*")
-
-    return response
 
 
 if __name__ == "__main__":
