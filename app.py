@@ -268,16 +268,6 @@ def submitCalculation():
     return response
 
 
-@app.route("/getSubmissions", methods=["GET"])
-def get_submission():
-    sql = "SELECT job_id FROM Job ORDER BY job_id DESC"
-    submission_IDS = db.executeSingleSQLstatement(CUR, sql, fetchall=True)
-
-    response = jsonify(submission_IDS)
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    return response
-
-
 @app.route("/getFile", methods=["POST"])
 def get_file(path):
     subID = request.json["subID"]
@@ -298,12 +288,11 @@ def get_file(path):
 
 @app.route("/getLatestsSubmissions", methods=["POST"])
 def getLatestsSubmissions():
+    sql = "SELECT job_id FROM Job ORDER BY job_id DESC"
+    submission_IDS = db.executeSingleSQLstatement(CUR, sql, fetchall=True)
 
-    response_dict = {}
-
-    response = jsonify(response_dict)
+    response = jsonify(submission_IDS)
     response.headers.add("Access-Control-Allow-Origin", "*")
-
     return response
 
 
