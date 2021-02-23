@@ -62,7 +62,8 @@ def run(idcode):
     return response
 
 
-def run_pypka(parameters):
+def run_pypka(parameters, get_params=False):
+    """"""
     tit = Titration(parameters)
 
     tit_x = []
@@ -91,7 +92,10 @@ def run_pypka(parameters):
         "parameters": tit.getParameters(),
     }
 
-    return response_dict
+    if get_params:
+        return response_dict, tit.getParametersDict()
+    else:
+        return response_dict
 
 
 def send_email(outputemail):
@@ -190,6 +194,8 @@ def getSubID():
 def submitCalculation():
 
     pdbfile = request.json["pdb"]
+    pdbid = request.json["pdbid"]
+
     input_naming_scheme = request.json["inputNamingScheme"]
 
     pHmin = request.json["pHmin"]
@@ -206,6 +212,7 @@ def submitCalculation():
     outputfilepH = request.json["outputFilepH"]
 
     outputemail = request.json["email"]
+    error = request.json["error"]
 
     subID = request.json["subID"]
 
@@ -243,11 +250,11 @@ def submitCalculation():
 
     pprint(parameters)
 
-    response_dict = run_pypka(parameters)
+    response_dict, final_params = run_pypka(parameters, get_params=True)
 
     pdb_out = None
     if outputfile:
-        with open("out_{0}.pdb".format(subID)) as f:
+        with open("pdbs_out/out_{0}.pdb".format(subID)) as f:
             pdb_out = f.read()
     response_dict["pdb_out"] = pdb_out
 
@@ -260,10 +267,34 @@ def submitCalculation():
     with open("submissions/{0}".format(subID), "w") as f_new:
         f_new.write(pformat(response_dict))
 
-    db.insert_new_submission(CONN, CUR, cur_date, response_dict)
+    db.insert_new_submission(
+        CONN,
+        CUR,
+        cur_date,
+        response_dict,
+        pdbid,
+        final_params,
+        pdbfile,
+        outputemail,
+        error,
+    )
 
     if outputemail:
         send_email(outputemail)
+
+    return response
+
+
+@app.route("/getSubmissions", methods=["POST"])
+def get_submission():
+    sql = "SELECT job_id FROM Job ORDER BY job_id DESC"
+    submission_IDS = db.executeSingleSQLstatement(CONN, CUR, sql, fetchall=True)
+
+    response = jsonify(submission_IDS)
+    response.headers.add("Access-Control-Allow-Origin", "*")
+
+    # TODO: get job_id, protein_name, submission_datetime, pdb_out exists? bolean
+    # TODO: fix 1qyv insertion error
 
     return response
 
@@ -273,6 +304,9 @@ def get_file(path):
     subID = request.json["subID"]
     ftype = request.json["ftype"]
 
+    # TODO: get correct variable from the database
+
+    # TODO: format the variable accordingly to download as file
     if ftype == "titration":
         pass
     elif ftype == "parameters":
@@ -286,16 +320,6 @@ def get_file(path):
     return send_file(fname, cache_timeout=36000)
 
 
-@app.route("/getLatestsSubmissions", methods=["POST"])
-def getLatestsSubmissions():
-    sql = "SELECT job_id FROM Job ORDER BY job_id DESC"
-    submission_IDS = db.executeSingleSQLstatement(CUR, sql, fetchall=True)
-
-    response = jsonify(submission_IDS)
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    return response
-
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0")
-    # app.run(host="127.0.0.1")
+    # app.run(host="0.0.0.0")
+    app.run(host="127.0.0.1")
