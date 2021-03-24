@@ -1,5 +1,6 @@
 from flask import Flask, jsonify, request, send_file, Response
 from flask_cors import CORS
+
 import hashlib
 from pprint import pprint, pformat
 import datetime
@@ -7,14 +8,25 @@ import os
 import smtplib
 import requests
 from dotenv import dotenv_values
+import time
+import sys
+from contextlib import contextmanager
+import logging
+from multiprocessing import Process, Queue
+
+import redis
 
 from pypka import Titration
 from pypka.main import getTitrableSites
 
 import db
 
+logging.basicConfig(filename="server.log", level=logging.DEBUG)
+
 app = Flask(__name__, static_url_path="/static")
 CORS(app, resources={r"/*": {"origins": "*"}})
+# socketio = SocketIO(app, cors_allowed_origins="*")
+
 CONN, CUR = db.db_connect()
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
@@ -25,6 +37,8 @@ import importlib.util
 spec = importlib.util.spec_from_file_location("pkpdb", config["PKPDB"])
 pkpdb = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pkpdb)
+
+redis_conn = redis.from_url("redis://localhost:6379")
 
 session = pkpdb.session
 Protein = pkpdb.Protein
@@ -88,7 +102,7 @@ def retrieve_pkpdb_titcurve(idcode):
         if tit_curve:
             for pH, prot in tit_curve[0][0].items():
                 tit_x.append(pH)
-                tit_y.append(prot)
+                tit_y.append(round(prot, 2))
 
     return tit_x, tit_y
 
@@ -148,7 +162,7 @@ def run(idcode):
     }
 
     try:
-        response_dict = run_pypka(parameters)
+        response_dict = run_pypka(parameters, subID)
     except Exception as e:
         response_dict = {"PDBID": idcode, "Error": str(e)}
         return jsonify(response_dict)
@@ -160,37 +174,118 @@ def run(idcode):
     return response
 
 
-def run_pypka(parameters, get_params=False):
+def fileno(file_or_fd):
+    fd = getattr(file_or_fd, "fileno", lambda: file_or_fd)()
+    if not isinstance(fd, int):
+        raise ValueError("Expected a file (`.fileno()`) or a file descriptor")
+    return fd
+
+
+@contextmanager
+def stdout_redirected(to=os.devnull, stdout=None):
+    if stdout is None:
+        stdout = sys.stdout
+
+    stdout_fd = fileno(stdout)
+    with os.fdopen(os.dup(stdout_fd), "wb") as copied:
+        stdout.flush()
+        try:
+            os.dup2(fileno(to), stdout_fd)
+        except ValueError:
+            with open(to, "wb") as to_file:
+                os.dup2(to_file.fileno(), stdout_fd)
+        try:
+            yield stdout
+        finally:
+            stdout.flush()
+            os.dup2(copied.fileno(), stdout_fd)
+
+
+@app.route("/queue-size")
+def get_queue_size():
+    queue_size = redis_conn.llen("queue")
+    response = jsonify(queue_size)
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
+
+
+def launch_pypka_process(subID, params, queue):
+    new_dir = f"/tmp/tmp_{subID}"
+    os.mkdir(new_dir)
+    os.chdir(new_dir)
+    try:
+        with open(f"LOG_{subID}", "a") as f, stdout_redirected(f):
+            tit = Titration(params)
+
+        tit_x = []
+        tit_y = []
+        for pH, prot in tit.getTitrationCurve().items():
+            tit_x.append(pH)
+            tit_y.append(prot)
+
+        pKs = []
+        for site in tit:
+            pK = site.pK
+            if pK:
+                pK = round(site.pK, 2)
+            else:
+                pK = "-"
+
+            res_number = site.getResNumber()
+
+            pKs.append([site.molecule.chain, site.res_name, res_number, pK])
+
+        params = tit.getParameters()
+        params_dicts = tit.getParametersDict()
+        pI = tit.getIsoelectricPoint()
+
+        queue.put((tit_x, tit_y, pKs, params, params_dicts, pI))
+
+    except Exception as e:
+        queue.put(e)
+
+
+def run_pypka(parameters, subID, get_params=False):
     """"""
-    tit = Titration(parameters)
+    logging.info(f"{subID} added to the Queue")
+    redis_conn.rpush("queue", subID)
 
-    tit_x = []
-    tit_y = []
-    for pH, prot in tit.getTitrationCurve().items():
-        tit_x.append(pH)
-        tit_y.append(prot)
+    while redis_conn.lindex("queue", 0).decode() != subID:
+        time.sleep(2)
+        logging.info(f"{redis_conn.lindex('queue', 0)} {subID}")
 
-    pKs = []
-    for site in tit:
-        pK = site.pK
-        if pK:
-            pK = round(site.pK, 2)
-        else:
-            pK = "-"
+    logging.info(f"{subID} started")
 
-        res_number = site.getResNumber()
+    q = Queue()
+    p = Process(
+        target=launch_pypka_process,
+        args=(
+            subID,
+            parameters,
+            q,
+        ),
+    )
+    p.start()
+    p.join()
+    results = q.get()
 
-        pKs.append([site.molecule.chain, site.res_name, res_number, pK])
+    logging.info(f"{subID} removed from the Queue")
+    redis_conn.lpop("queue")
+
+    if type(results) is Exception:
+        raise results
+    else:
+        tit_x, tit_y, pKs, params, params_dicts, pI = results
 
     response_dict = {
         "titration": [tit_x, tit_y],
         "pKas": pKs,
-        "parameters": tit.getParameters(),
-        "pI": round(tit.getIsoelectricPoint(), 2),
+        "parameters": params,
+        "pI": round(pI, 2),
     }
 
     if get_params:
-        return response_dict, tit.getParametersDict()
+        return response_dict, params_dicts
     else:
         return response_dict
 
@@ -224,9 +319,9 @@ def send_email(outputemail):
         server.sendmail(sent_from, to, email_text)
         server.close()
 
-        print("Email sent!")
+        logging.info("Email sent!")
     except:
-        print("Something went wrong...")
+        logging.info("Something went wrong...")
 
 
 def save_pdb(pdbfile, subID):
@@ -267,8 +362,6 @@ def getNumberOfTitratableSites():
 
     response_dict = {"nchains": nchains, "nsites": nres}
 
-    print(response_dict)
-
     response = jsonify(response_dict)
     response.headers.add("Access-Control-Allow-Origin", "*")
     return response
@@ -281,8 +374,6 @@ def getSubID():
 
     response = jsonify({"subID": subID})
     response.headers.add("Access-Control-Allow-Origin", "*")
-
-    print("getSubID", response)
 
     return response
 
@@ -343,13 +434,13 @@ def submitCalculation():
             "pH": pH,
             "pHstep": pHstep,
             "epsin": epsin,
-            "epsout": epsout,
+            "epssol": epsout,
             "ionicstr": ionic,
             "ffinput": input_naming_scheme,
             "scaleM": 2,
             "convergence": 0.1,
             "pbc_dimensions": 0,
-            "ncpus": -1,
+            "ncpus": 16,
             "clean": True,
             "ser_thr_titration": False,
             "titration_output": f"{dir_path}/titrations/titration_{subID}.out",
@@ -363,7 +454,11 @@ def submitCalculation():
                 outputfilenaming,
             )
 
-        response_dict, final_params = run_pypka(parameters, get_params=True)
+        try:
+            response_dict, final_params = run_pypka(parameters, subID, get_params=True)
+        except Exception as e:
+            response_dict = {"Error": str(e)}
+            return jsonify(response_dict)
 
         pdb_out = None
         if outputfile:
@@ -437,3 +532,4 @@ def get_file(path):
 if __name__ == "__main__":
     # app.run(host="0.0.0.0")
     app.run(host="127.0.0.1", debug=True)
+    # socketio.run(app, host="127.0.0.1", debug=True)
