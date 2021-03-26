@@ -1,6 +1,7 @@
 *.out
 *.pdb
 subs.txt
+*.log
 LOG*
 __pycache__
 passemail.py

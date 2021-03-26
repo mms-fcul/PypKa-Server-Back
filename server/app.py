@@ -13,10 +13,10 @@ import sys
 from contextlib import contextmanager
 import logging
 from multiprocessing import Process, Queue
-
-import redis
+from threading import Thread
 
 from pypka import Titration
+from pypka import __version__ as pypka_version
 from pypka.main import getTitrableSites
 
 import db
@@ -25,9 +25,6 @@ logging.basicConfig(filename="server.log", level=logging.DEBUG)
 
 app = Flask(__name__, static_url_path="/static")
 CORS(app, resources={r"/*": {"origins": "*"}})
-# socketio = SocketIO(app, cors_allowed_origins="*")
-
-CONN, CUR = db.db_connect()
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 config = dotenv_values(f"{dir_path}/../.env")
@@ -38,13 +35,15 @@ spec = importlib.util.spec_from_file_location("pkpdb", config["PKPDB"])
 pkpdb = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pkpdb)
 
-redis_conn = redis.from_url("redis://localhost:6379")
-
 session = pkpdb.session
 Protein = pkpdb.Protein
 Residue = pkpdb.Residue
 Pk_sim = pkpdb.Pk_sim
 Pk = pkpdb.Pk
+
+from job_queue import Jobqueue
+
+job_queue = Jobqueue()
 
 
 @app.route("/isoelectric.csv.gz")
@@ -120,8 +119,18 @@ def retrieve_pkpdb_pis(idcode):
 
 @app.route("/query/<idcode>")
 def pkpdb_query(idcode):
-    results = retrieve_from_pkpdb(idcode)
-    response = jsonify(results)
+
+    tit_x, tit_y = retrieve_pkpdb_titcurve(idcode)
+
+    response_dict = {
+        "tit_x": tit_x,
+        "tit_y": tit_y,
+        "pKas": retrieve_from_pkpdb(idcode),
+        "pI": retrieve_pkpdb_pis(idcode),
+        "params": "DEFAULT PARAMS",
+    }
+
+    response = jsonify(response_dict)
     response.headers.add("Access-Control-Allow-Origin", "*")
     return response
 
@@ -203,8 +212,7 @@ def stdout_redirected(to=os.devnull, stdout=None):
 
 @app.route("/queue-size")
 def get_queue_size():
-    queue_size = redis_conn.llen("queue")
-    response = jsonify(queue_size)
+    response = jsonify(len(job_queue))
     response.headers.add("Access-Control-Allow-Origin", "*")
     return response
 
@@ -239,6 +247,9 @@ def launch_pypka_process(subID, params, queue):
         params_dicts = tit.getParametersDict()
         pI = tit.getIsoelectricPoint()
 
+        if type(pI) == tuple:
+            pI, limit, charge = pI
+
         queue.put((tit_x, tit_y, pKs, params, params_dicts, pI))
 
     except Exception as e:
@@ -248,11 +259,11 @@ def launch_pypka_process(subID, params, queue):
 def run_pypka(parameters, subID, get_params=False):
     """"""
     logging.info(f"{subID} added to the Queue")
-    redis_conn.rpush("queue", subID)
+    job_queue.add(subID)
 
-    while redis_conn.lindex("queue", 0).decode() != subID:
+    while job_queue.top() != subID:
         time.sleep(2)
-        logging.info(f"{redis_conn.lindex('queue', 0)} {subID}")
+        logging.info(f"{job_queue.top()} {subID}")
 
     logging.info(f"{subID} started")
 
@@ -269,8 +280,9 @@ def run_pypka(parameters, subID, get_params=False):
     p.join()
     results = q.get()
 
+    logging.info(f"{subID} finished succesfully: {type(results) is not Exception}")
     logging.info(f"{subID} removed from the Queue")
-    redis_conn.lpop("queue")
+    job_queue.pop()
 
     if type(results) is Exception:
         raise results
@@ -381,22 +393,22 @@ def getSubID():
 @app.route("/submitSim", methods=["POST"])
 def submitCalculation():
 
-    pdbfile = request.json["pdb"]
-    pdbid = request.json["pdbid"]
+    pdbfile = request.json["pdbfile"]
+    pdbid = request.json["pdbcode"]
 
-    input_naming_scheme = request.json["inputNamingScheme"]
+    input_naming_scheme = request.json["inputFileNamingScheme"]
 
     pHmin = request.json["pHmin"]
     pHmax = request.json["pHmax"]
     pHstep = request.json["pHstep"]
 
-    epsin = request.json["epsin"]
-    epsout = request.json["epsout"]
-    ionic = request.json["ionic"]
+    epsin = request.json["proteinDielectric"]
+    epsout = request.json["solventDielectric"]
+    ionic = request.json["ionicStrength"]
 
-    outputpKs = request.json["outputpKs"]
-    outputfile = request.json["outputfile"]
-    outputfilenaming = request.json["outputNamingScheme"]
+    outputpKs = request.json["outputpKValues"]
+    outputfile = request.json["outputPDBFile"]
+    outputfilenaming = request.json["outputFileNamingScheme"]
     outputfilepH = request.json["outputFilepH"]
 
     on_PKPDB = request.json["onPKPDB"]
@@ -404,7 +416,7 @@ def submitCalculation():
 
     outputemail = request.json["email"]
 
-    subID = request.json["subID"]
+    subID = get_subID(request)
 
     newfilename = save_pdb(pdbfile, subID)
 
@@ -414,21 +426,11 @@ def submitCalculation():
         pH = str(outputfilepH)
 
     if on_PKPDB and default_parameters and not outputfile:
-        tit_x, tit_y = retrieve_pkpdb_titcurve(pdbid)
-
-        response_dict = {
-            "titration": [tit_x, tit_y],
-            "pKas": retrieve_from_pkpdb(pdbid),
-            "pI": retrieve_pkpdb_pis(pdbid),
-            "parameters": "DEFAULT PARAMS",
-        }
-        response = jsonify(response_dict)
-        response.headers.add("Access-Control-Allow-Origin", "*")
+        response = pkpdb_query(pdbid)
 
         return response
 
     else:
-
         parameters = {
             "structure": newfilename,
             "pH": pH,
@@ -454,44 +456,136 @@ def submitCalculation():
                 outputfilenaming,
             )
 
-        try:
-            response_dict, final_params = run_pypka(parameters, subID, get_params=True)
-        except Exception as e:
-            response_dict = {"Error": str(e)}
-            return jsonify(response_dict)
+        sub_parameters = (pdbid, pdbfile, outputemail)
 
-        pdb_out = None
-        if outputfile:
-            with open(f"{dir_path}/pdbs_out/out_{subID}.pdb") as f:
-                pdb_out = f.read()
-        response_dict["pdb_out"] = pdb_out
+        Thread(
+            target=submit_pypka_job,
+            args=(
+                parameters,
+                sub_parameters,
+                subID,
+            ),
+        ).start()
 
-        response = jsonify(response_dict)
+        response = jsonify({"subID": subID})
         response.headers.add("Access-Control-Allow-Origin", "*")
 
-        cur_date = datetime.datetime.today()
-        with open("subs.txt", "a") as f_new:
-            f_new.write(f"{subID} {cur_date}\n")
-        with open(f"{dir_path}/submissions/{subID}", "w") as f_new:
-            f_new.write(pformat(response_dict))
+        return response
 
-        error = None
-        db.insert_new_submission(
-            CONN,
-            CUR,
-            cur_date,
-            response_dict,
-            pdbid,
-            final_params,
-            pdbfile,
-            outputemail,
-            error,
+
+def submit_pypka_job(pypka_params, sub_params, subID):
+    pdbid, pdbfile, outputemail = sub_params
+    try:
+        response_dict, final_params = run_pypka(pypka_params, subID, get_params=True)
+        response_dict["error"] = None
+    except Exception as e:
+        response_dict = {"error": str(e)}
+
+    pdb_out = None
+    if "structure_output" in pypka_params:
+        with open(f"{dir_path}/pdbs_out/out_{subID}.pdb") as f:
+            pdb_out = f.read()
+    response_dict["pdb_out"] = pdb_out
+
+    cur_date = datetime.datetime.today()
+
+    session = db.session
+    Job = db.Job
+    Protein = db.Protein
+    Input = db.Input
+    Residue = db.Residue
+    Results = db.Results
+    Pk = db.Pk
+
+    new_job = Job(dat_time=cur_date, email=outputemail, sub_id=subID)
+    session.add(new_job)
+    session.commit()
+
+    pid = session.query(Protein.protein_id).filter(Protein.pdb_code == pdbid).first()
+    if pid:
+        pid = pid[0]
+    else:
+        new_protein = Protein(pdb_code=pdbid, pdb_file=pdbfile)
+        session.add(new_protein)
+        session.commit()
+        pid = new_protein.protein_id
+
+    if response_dict["error"]:
+        new_results = Results(
+            job_id=new_job.job_id,
+            error=response_dict["error"],
+        )
+        session.add(new_results)
+        session.commit()
+        return
+
+    new_results = Results(
+        job_id=new_job.job_id,
+        tit_curve=response_dict["titration"],
+        isoelectric_point=response_dict["pI"],
+        pdb_out=response_dict["pdb_out"],
+    )
+    session.add(new_results)
+    session.commit()
+
+    to_keep = [
+        "CpHMD_mode",
+        "ffID",
+        "ff_family",
+        "ffinput",
+        "clean_pdb",
+        "LIPIDS",
+        "keep_ions",
+        "ser_thr_titration",
+        "cutoff",
+        "slice",
+    ]
+
+    pypka_params, delphi_params, mc_params = final_params
+    pypka_params = {key: value for key, value in pypka_params.items() if key in to_keep}
+    pypka_params["version"] = pypka_version
+    mc_params["pH_values"] = list(mc_params["pH_values"])
+
+    new_input = Input(
+        job_id=new_job.job_id,
+        protein_id=pid,
+        pypka_set=pypka_params,
+        pb_set=delphi_params,
+        mc_set=mc_params,
+    )
+    session.add(new_input)
+
+    for (chain, res_name, res_number, pK) in response_dict["pKas"]:
+        resid = (
+            session.query(Residue.res_id)
+            .filter(Residue.protein_id == pid)
+            .filter(Residue.res_name == res_name)
+            .filter(Residue.chain == chain)
+            .filter(Residue.res_number == res_number)
+            .first()
         )
 
-        if outputemail:
-            send_email(outputemail)
+        if resid:
+            resid = resid[0]
+        else:
+            new_residue = Residue(
+                protein_id=pid,
+                res_name=res_name,
+                chain=chain,
+                res_number=res_number,
+            )
+            session.add(new_residue)
+            session.commit()
+            resid = new_residue.res_id
 
-        return response
+        new_pk = Pk(job_id=new_job.job_id, res_id=resid, pk=pK)
+        session.add(new_pk)
+        session.commit()
+
+    # if outputemail:
+    #    send_email(outputemail)
+
+    logging.info(f"{subID} exiting")
 
 
 @app.route("/getSubmissions", methods=["POST", "GET"])
@@ -530,6 +624,4 @@ def get_file(path):
 
 
 if __name__ == "__main__":
-    # app.run(host="0.0.0.0")
     app.run(host="127.0.0.1", debug=True)
-    # socketio.run(app, host="127.0.0.1", debug=True)
