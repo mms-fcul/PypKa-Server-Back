@@ -3,7 +3,13 @@ import socketio
 import os
 import time
 from job_queue import Jobqueue
-from db import session, Job, Results, Residue, Pk
+from db import session, Job, Results, Residue, Pk, Input, Protein
+import logging
+from pprint import pformat
+
+logging.basicConfig(
+    filename="/home/pedror/PypKa-Server-Back/server/socket.log", level=logging.DEBUG
+)
 
 sio = socketio.AsyncServer(cors_allowed_origins="*")
 app = web.Application()
@@ -20,20 +26,43 @@ async def index(request):
 @sio.on("get pypka status", namespace="/")
 async def pypka_status(sid, subID):
 
+    logging.info(f"STARTED {subID}")
     job_id = session.query(Job.job_id).filter_by(sub_id=subID).first()
     if job_id and not jobqueue.in_queue(subID):
         job_id = job_id[0]
 
-        tit_x, tit_y, pI, pKas = None, None, None, []
+        tit_x, tit_y, pI = None, None, None
+        pKas = []
+        pdb_out = None
+        nchains, nsites = None, None
 
         results = (
-            session.query(Results.tit_curve, Results.isoelectric_point, Results.error)
+            session.query(
+                Results.tit_curve,
+                Results.isoelectric_point,
+                Results.pdb_out,
+                Results.error,
+            )
             .filter(Results.job_id == job_id)
             .first()
         )
 
+        protein = (
+            session.query(Protein.nchains, Protein.nsites)
+            .join(Input, Input.protein_id == Protein.protein_id)
+            .filter(Input.job_id == job_id)
+            .first()
+        )
+
+        params = (
+            session.query(Input.mc_set, Input.pb_set, Input.pypka_set)
+            .filter(Input.job_id == job_id)
+            .first()
+        )
+
         if results:
-            tit_curve, pI, error = results
+            tit_curve, pI, pdb_out, error = results
+            nchains, nsites = protein
 
             if error:
                 await sio.emit(
@@ -41,12 +70,25 @@ async def pypka_status(sid, subID):
                     {
                         "content": {"failed": True, "log": error},
                         "subID": subID,
+                        "nsites": nsites,
+                        "nchains": nchains,
                         "status": "success",
                     },
                 )
                 return
-            else:
-                (tit_x, tit_y) = tit_curve
+
+            (tit_x, tit_y) = tit_curve
+
+            mc_set, pb_set, pypka_set = params
+
+            pHmin, pHmax = mc_set["pHmin"], mc_set["pHmax"]
+            ionicstr, epssol, epsin = (
+                pb_set["ionicstr"],
+                pb_set["epssol"],
+                pb_set["epsin"],
+            )
+
+            all_params = pformat({**pypka_set, **pb_set, **mc_set})
 
         pks = (
             session.query(Residue.chain, Residue.res_name, Residue.res_number, Pk.pk)
@@ -69,8 +111,16 @@ async def pypka_status(sid, subID):
                 "tit_x": tit_x,
                 "tit_y": tit_y,
                 "pKas": pKas,
-                "pI": pI
-                # "params": "DEFAULT PARAMS",
+                "pI": pI,
+                "nsites": nsites,
+                "nchains": nchains,
+                "pHmin": pHmin,
+                "pHmax": pHmax,
+                "ionicStrength": ionicstr,
+                "proteinDielectric": epsin,
+                "solventDielectric": epssol,
+                "params": all_params,
+                "pdb_out": pdb_out,
             }
 
             await sio.emit(
@@ -108,5 +158,5 @@ async def pypka_status(sid, subID):
 app.router.add_get("/", index)
 
 if __name__ == "__main__":
-    # web.run_app(app, port="8888")
-    web.run_app(app)
+    web.run_app(app, port="8888")
+    # web.run_app(app)

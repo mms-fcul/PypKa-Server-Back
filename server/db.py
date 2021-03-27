@@ -61,6 +61,8 @@ class Protein(Base):
     __tablename__ = "protein"
 
     protein_id = Column(Integer, primary_key=True)
+    nchains = Column(Integer(), nullable=False)
+    nsites = Column(Integer, nullable=False)
     pdb_code = Column(CHAR, unique=True)
     pdb_file = Column(JSON, nullable=False)
 

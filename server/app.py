@@ -1,5 +1,5 @@
-from flask import Flask, jsonify, request, send_file, Response
-from flask_cors import CORS
+from flask import Flask, jsonify, request, send_file, Response, make_response
+from flask_cors import CORS, cross_origin
 
 import hashlib
 from pprint import pprint, pformat
@@ -14,6 +14,9 @@ from contextlib import contextmanager
 import logging
 from multiprocessing import Process, Queue
 from threading import Thread
+import traceback
+import json
+
 
 from pypka import Titration
 from pypka import __version__ as pypka_version
@@ -21,10 +24,29 @@ from pypka.main import getTitrableSites
 
 import db
 
-logging.basicConfig(filename="server.log", level=logging.DEBUG)
+logging.basicConfig(
+    filename="/home/pedror/PypKa-Server-Back/server/server.log", level=logging.DEBUG
+)
 
 app = Flask(__name__, static_url_path="/static")
+app.config["SECRET_KEY"] = str(datetime.datetime.today())
+app.config["CORS_HEADERS"] = "Content-Type"
+
 CORS(app, resources={r"/*": {"origins": "*"}})
+
+
+def _build_cors_prelight_response():
+    response = make_response()
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    response.headers.add("Access-Control-Allow-Headers", "*")
+    response.headers.add("Access-Control-Allow-Methods", "*")
+    return response
+
+
+def _corsify_actual_response(response):
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
+
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 config = dotenv_values(f"{dir_path}/../.env")
@@ -280,11 +302,11 @@ def run_pypka(parameters, subID, get_params=False):
     p.join()
     results = q.get()
 
-    logging.info(f"{subID} finished succesfully: {type(results) is not Exception}")
+    logging.info(f"{subID} finished succesfully: {isinstance(results, Exception)}")
     logging.info(f"{subID} removed from the Queue")
     job_queue.pop()
 
-    if type(results) is Exception:
+    if isinstance(results, Exception):
         raise results
     else:
         tit_x, tit_y, pKs, params, params_dicts, pI = results
@@ -363,7 +385,15 @@ def getNumberOfTitratableSites():
     subID = get_subID(request)
     newfilename = save_pdb(pdbfile, subID)
 
-    out_sites, chains_res = getTitrableSites(newfilename, ser_thr_titration=False)
+    try:
+        out_sites, chains_res = getTitrableSites(newfilename, ser_thr_titration=False)
+    except Exception as e:
+        tb = traceback.format_exc()
+        logging.error(tb)
+        response_dict = {"error": str(e)}
+        response = jsonify(response_dict)
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response
 
     os.remove(newfilename)
 
@@ -405,6 +435,9 @@ def submitCalculation():
     epsin = request.json["proteinDielectric"]
     epsout = request.json["solventDielectric"]
     ionic = request.json["ionicStrength"]
+
+    nsites = request.json["nsites"]
+    nchains = request.json["nchains"]
 
     outputpKs = request.json["outputpKValues"]
     outputfile = request.json["outputPDBFile"]
@@ -456,7 +489,7 @@ def submitCalculation():
                 outputfilenaming,
             )
 
-        sub_parameters = (pdbid, pdbfile, outputemail)
+        sub_parameters = (pdbid, pdbfile, outputemail, nsites, nchains)
 
         Thread(
             target=submit_pypka_job,
@@ -474,15 +507,17 @@ def submitCalculation():
 
 
 def submit_pypka_job(pypka_params, sub_params, subID):
-    pdbid, pdbfile, outputemail = sub_params
+    pdbid, pdbfile, outputemail, nsites, nchains = sub_params
     try:
         response_dict, final_params = run_pypka(pypka_params, subID, get_params=True)
         response_dict["error"] = None
     except Exception as e:
+        tb = traceback.format_exc()
+        logging.error(tb)
         response_dict = {"error": str(e)}
 
     pdb_out = None
-    if "structure_output" in pypka_params:
+    if "structure_output" in pypka_params and not response_dict["error"]:
         with open(f"{dir_path}/pdbs_out/out_{subID}.pdb") as f:
             pdb_out = f.read()
     response_dict["pdb_out"] = pdb_out
@@ -505,7 +540,9 @@ def submit_pypka_job(pypka_params, sub_params, subID):
     if pid:
         pid = pid[0]
     else:
-        new_protein = Protein(pdb_code=pdbid, pdb_file=pdbfile)
+        new_protein = Protein(
+            pdb_code=pdbid, pdb_file=pdbfile, nsites=nsites, nchains=nchains
+        )
         session.add(new_protein)
         session.commit()
         pid = new_protein.protein_id
@@ -517,16 +554,12 @@ def submit_pypka_job(pypka_params, sub_params, subID):
         )
         session.add(new_results)
         session.commit()
-        return
 
-    new_results = Results(
-        job_id=new_job.job_id,
-        tit_curve=response_dict["titration"],
-        isoelectric_point=response_dict["pI"],
-        pdb_out=response_dict["pdb_out"],
-    )
-    session.add(new_results)
-    session.commit()
+        new_input = Input(job_id=new_job.job_id, protein_id=pid)
+        session.add(new_input)
+        session.commit()
+
+        return
 
     to_keep = [
         "CpHMD_mode",
@@ -540,7 +573,6 @@ def submit_pypka_job(pypka_params, sub_params, subID):
         "cutoff",
         "slice",
     ]
-
     pypka_params, delphi_params, mc_params = final_params
     pypka_params = {key: value for key, value in pypka_params.items() if key in to_keep}
     pypka_params["version"] = pypka_version
@@ -554,6 +586,7 @@ def submit_pypka_job(pypka_params, sub_params, subID):
         mc_set=mc_params,
     )
     session.add(new_input)
+    session.commit()
 
     for (chain, res_name, res_number, pK) in response_dict["pKas"]:
         resid = (
@@ -582,6 +615,15 @@ def submit_pypka_job(pypka_params, sub_params, subID):
         session.add(new_pk)
         session.commit()
 
+    new_results = Results(
+        job_id=new_job.job_id,
+        tit_curve=response_dict["titration"],
+        isoelectric_point=response_dict["pI"],
+        pdb_out=response_dict["pdb_out"],
+    )
+    session.add(new_results)
+    session.commit()
+
     # if outputemail:
     #    send_email(outputemail)
 
@@ -590,10 +632,22 @@ def submit_pypka_job(pypka_params, sub_params, subID):
 
 @app.route("/getSubmissions", methods=["POST", "GET"])
 def get_submission():
-    sql = "SELECT job_id FROM Job ORDER BY job_id DESC"
-    submission_IDS = db.executeSingleSQLstatement(CONN, CUR, sql, fetchall=True)
 
-    response = jsonify(submission_IDS)
+    session = db.session
+    Job = db.Job
+    Protein = db.Protein
+    Input = db.Input
+
+    submission_IDS = (
+        session.query(Job.job_id, Job.dat_time, Protein.pdb_code, Job.sub_id)
+        .join(Input, Input.protein_id == Protein.protein_id)
+        .filter(Input.job_id == Job.job_id)
+        .order_by(Job.sub_id.desc())
+        .limit(25)
+        .all()
+    )
+
+    response = jsonify([i[:] for i in submission_IDS])
     response.headers.add("Access-Control-Allow-Origin", "*")
 
     # TODO: get job_id, protein_name, submission_datetime, pdb_out exists? bolean
