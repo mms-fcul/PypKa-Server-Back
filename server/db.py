@@ -86,6 +86,7 @@ class Results(Base):
     tit_curve = Column(JSON)
     isoelectric_point = Column(REAL)
     pdb_out = Column(JSON)
+    pdb_out_ph = Column(REAL)
     error = Column(Text)
     ForeignKeyConstraint(["job_id"], ["job.job_id"])
 

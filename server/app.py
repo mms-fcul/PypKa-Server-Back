@@ -24,9 +24,15 @@ from pypka.main import getTitrableSites
 
 import db
 
+STATUS = "maintenance"
+
 logging.basicConfig(
     filename="/home/pedror/PypKa-Server-Back/server/server.log", level=logging.DEBUG
 )
+
+root = logging.getLogger("werkzeug")
+root.handlers = logging.getLogger().handlers
+root.setLevel(logging.INFO)
 
 app = Flask(__name__, static_url_path="/static")
 app.config["SECRET_KEY"] = str(datetime.datetime.today())
@@ -85,7 +91,10 @@ def export_clusters():
 
 @app.route("/")
 def hello():
-    return "It's alive!"
+    status = "live"
+    if STATUS:
+        status = STATUS
+    return jsonify({"status": status})
 
 
 def retrieve_from_pkpdb(idcode):
@@ -149,7 +158,7 @@ def pkpdb_query(idcode):
         "tit_y": tit_y,
         "pKas": retrieve_from_pkpdb(idcode),
         "pI": retrieve_pkpdb_pis(idcode),
-        "params": "DEFAULT PARAMS",
+        "params": pformat(PKPDB_PARAMS),
     }
 
     response = jsonify(response_dict)
@@ -185,7 +194,7 @@ def run(idcode):
         "ionicstr": 0.1,
         "convergence": 0.1,
         "pbc_dimensions": 0,
-        "ncpus": 8,
+        "ncpus": 1,
         "clean": True,
         "ser_thr_titration": False,
         "titration_output": f"{dir_path}/titrations/titration_{subID}.out",
@@ -305,6 +314,8 @@ def run_pypka(parameters, subID, get_params=False):
     logging.info(f"{subID} finished succesfully: {isinstance(results, Exception)}")
     logging.info(f"{subID} removed from the Queue")
     job_queue.pop()
+
+    logging.info(results)
 
     if isinstance(results, Exception):
         raise results
@@ -475,7 +486,7 @@ def submitCalculation():
             "scaleM": 2,
             "convergence": 0.1,
             "pbc_dimensions": 0,
-            "ncpus": 16,
+            "ncpus": 32,
             "clean": True,
             "ser_thr_titration": False,
             "titration_output": f"{dir_path}/titrations/titration_{subID}.out",
@@ -506,10 +517,10 @@ def submitCalculation():
         return response
 
 
-def submit_pypka_job(pypka_params, sub_params, subID):
+def submit_pypka_job(job_params, sub_params, subID):
     pdbid, pdbfile, outputemail, nsites, nchains = sub_params
     try:
-        response_dict, final_params = run_pypka(pypka_params, subID, get_params=True)
+        response_dict, final_params = run_pypka(job_params, subID, get_params=True)
         response_dict["error"] = None
     except Exception as e:
         tb = traceback.format_exc()
@@ -517,7 +528,7 @@ def submit_pypka_job(pypka_params, sub_params, subID):
         response_dict = {"error": str(e)}
 
     pdb_out = None
-    if "structure_output" in pypka_params and not response_dict["error"]:
+    if "structure_output" in job_params and not response_dict["error"]:
         with open(f"{dir_path}/pdbs_out/out_{subID}.pdb") as f:
             pdb_out = f.read()
     response_dict["pdb_out"] = pdb_out
@@ -547,7 +558,10 @@ def submit_pypka_job(pypka_params, sub_params, subID):
         session.commit()
         pid = new_protein.protein_id
 
+    logging.info(response_dict["error"])
+
     if response_dict["error"]:
+        logging.info(f"LOGGING ERROR of jobid #{new_job.job_id}")
         new_results = Results(
             job_id=new_job.job_id,
             error=response_dict["error"],
@@ -588,6 +602,8 @@ def submit_pypka_job(pypka_params, sub_params, subID):
     session.add(new_input)
     session.commit()
 
+    logging.info(f'inserting {response_dict["pKas"]} pKa values')
+
     for (chain, res_name, res_number, pK) in response_dict["pKas"]:
         resid = (
             session.query(Residue.res_id)
@@ -615,11 +631,18 @@ def submit_pypka_job(pypka_params, sub_params, subID):
         session.add(new_pk)
         session.commit()
 
+    logging.info(f"inserting Results")
+    pdb_out_ph = None
+    if "structure_output" in job_params:
+        logging.error(f'structure_out -> {job_params["structure_output"]}')
+        pdb_out_ph = job_params["structure_output"][1]
+
     new_results = Results(
         job_id=new_job.job_id,
         tit_curve=response_dict["titration"],
         isoelectric_point=response_dict["pI"],
         pdb_out=response_dict["pdb_out"],
+        pdb_out_ph=pdb_out_ph,
     )
     session.add(new_results)
     session.commit()
@@ -676,6 +699,45 @@ def get_file(path):
     fname = "test_file"
     return send_file(fname, cache_timeout=36000)
 
+
+PKPDB_PARAMS = {
+    "CpHMD_mode": False,
+    "LIPIDS": {},
+    "bndcon": 3,
+    "clean_pdb": True,
+    "couple_min": 2.0,
+    "cutoff": -1,
+    "epsin": 15.0,
+    "epssol": 80.0,
+    "eqsteps": 1000,
+    "ffID": "G54A7",
+    "ff_family": "GROMOS",
+    "ffinput": "GROMOS",
+    "gsize": 81,
+    "ionicstr": 0.1,
+    "keep_ions": False,
+    "maxc": 0.1,
+    "mcsteps": 200000,
+    "nanoshaper": -1,
+    "nlit": 500,
+    "nonit": 0,
+    "pHmax": 12.0,
+    "pHmin": 0.0,
+    "pHstep": 0.25,
+    "pbc_dim": 0,
+    "pbx": False,
+    "pby": False,
+    "perfil": 0.9,
+    "precision": "single",
+    "relfac": 0.75,
+    "relpar": 0.75,
+    "scaleM": 2.0,
+    "scaleP": 1,
+    "seed": 1234567,
+    "ser_thr_titration": False,
+    "slice": 0.05,
+    "version": "2.1.0",
+}
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", debug=True)

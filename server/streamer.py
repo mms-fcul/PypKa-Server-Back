@@ -41,6 +41,7 @@ async def pypka_status(sid, subID):
                 Results.tit_curve,
                 Results.isoelectric_point,
                 Results.pdb_out,
+                Results.pdb_out_ph,
                 Results.error,
             )
             .filter(Results.job_id == job_id)
@@ -60,8 +61,10 @@ async def pypka_status(sid, subID):
             .first()
         )
 
+        logging.info(results)
+
         if results:
-            tit_curve, pI, pdb_out, error = results
+            tit_curve, pI, pdb_out, pdb_out_ph, error = results
             nchains, nsites = protein
 
             if error:
@@ -121,6 +124,7 @@ async def pypka_status(sid, subID):
                 "solventDielectric": epssol,
                 "params": all_params,
                 "pdb_out": pdb_out,
+                "outputFilepH": pdb_out_ph
             }
 
             await sio.emit(
