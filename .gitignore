@@ -2,7 +2,9 @@
 *.pdb
 subs.txt
 *.log
+*csv.gz
 LOG*
+ACCESS*
 __pycache__
 passemail.py
 .env

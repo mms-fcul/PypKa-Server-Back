@@ -3,7 +3,7 @@ import socketio
 import os
 import time
 from job_queue import Jobqueue
-from db import session, Job, Results, Residue, Pk, Input, Protein
+from db import session_scope, Job, Results, Residue, Pk, Input, Protein
 import logging
 from pprint import pformat
 
@@ -27,7 +27,8 @@ async def index(request):
 async def pypka_status(sid, subID):
 
     logging.info(f"STARTED {subID}")
-    job_id = session.query(Job.job_id).filter_by(sub_id=subID).first()
+    with session_scope() as session:
+        job_id = session.query(Job.job_id).filter_by(sub_id=subID).first()
     if job_id and not jobqueue.in_queue(subID):
         job_id = job_id[0]
 
@@ -36,30 +37,31 @@ async def pypka_status(sid, subID):
         pdb_out = None
         nchains, nsites = None, None
 
-        results = (
-            session.query(
-                Results.tit_curve,
-                Results.isoelectric_point,
-                Results.pdb_out,
-                Results.pdb_out_ph,
-                Results.error,
+        with session_scope() as session:
+            results = (
+                session.query(
+                    Results.tit_curve,
+                    Results.isoelectric_point,
+                    Results.pdb_out,
+                    Results.pdb_out_ph,
+                    Results.error,
+                )
+                .filter(Results.job_id == job_id)
+                .first()
             )
-            .filter(Results.job_id == job_id)
-            .first()
-        )
 
-        protein = (
-            session.query(Protein.nchains, Protein.nsites)
-            .join(Input, Input.protein_id == Protein.protein_id)
-            .filter(Input.job_id == job_id)
-            .first()
-        )
+            protein = (
+                session.query(Protein.nchains, Protein.nsites)
+                .join(Input, Input.protein_id == Protein.protein_id)
+                .filter(Input.job_id == job_id)
+                .first()
+            )
 
-        params = (
-            session.query(Input.mc_set, Input.pb_set, Input.pypka_set)
-            .filter(Input.job_id == job_id)
-            .first()
-        )
+            params = (
+                session.query(Input.mc_set, Input.pb_set, Input.pypka_set)
+                .filter(Input.job_id == job_id)
+                .first()
+            )
 
         logging.info(results)
 
@@ -93,12 +95,15 @@ async def pypka_status(sid, subID):
 
             all_params = pformat({**pypka_set, **pb_set, **mc_set})
 
-        pks = (
-            session.query(Residue.chain, Residue.res_name, Residue.res_number, Pk.pk)
-            .filter(Residue.res_id == Pk.res_id)
-            .filter(Pk.job_id == job_id)
-            .all()
-        )
+        with session_scope() as session:
+            pks = (
+                session.query(
+                    Residue.chain, Residue.res_name, Residue.res_number, Pk.pk
+                )
+                .filter(Residue.res_id == Pk.res_id)
+                .filter(Pk.job_id == job_id)
+                .all()
+            )
 
         if pks:
             for pk in pks:
@@ -124,7 +129,7 @@ async def pypka_status(sid, subID):
                 "solventDielectric": epssol,
                 "params": all_params,
                 "pdb_out": pdb_out,
-                "outputFilepH": pdb_out_ph
+                "outputFilepH": pdb_out_ph,
             }
 
             await sio.emit(

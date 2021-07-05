@@ -57,3 +57,12 @@ CREATE TABLE pk (
     FOREIGN KEY(res_id) REFERENCES residue(res_id),
     FOREIGN KEY(job_id) REFERENCES job(job_id)
 );
+
+create table usage_stats(
+    usid serial,
+    pkpdb_queries   integer,
+    pkpdb_downloads integer,
+    pypka_subs      integer,
+    pkai_subs       integer,
+    PRIMARY KEY (usid)
+);
