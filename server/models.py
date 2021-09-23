@@ -1,41 +1,6 @@
-from sqlalchemy import create_engine, ForeignKeyConstraint, UniqueConstraint
 from sqlalchemy import Column, Integer, Date, CHAR, JSON, Time, Text, VARCHAR, REAL
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from contextlib import contextmanager
-import psycopg2
-from dotenv import dotenv_values
-import os
-
-dir_path = os.path.dirname(os.path.realpath(__file__))
-config = dotenv_values(f"{dir_path}/../.env")
-
-user = config["user"]
-password = config["password"]
-ip = config["host"]
-port = config["port"]
-database = config["database"]
-
-db_path = f"postgresql://{user}:{password}@{ip}:{port}/{database}"
-
-
-@contextmanager
-def session_scope():
-    db = create_engine(db_path)
-    Session = sessionmaker(bind=db)
-    session = Session()
-    try:
-        yield session
-        session.commit()
-    except:
-        # if any kind of exception occurs, rollback transaction
-        session.rollback()
-        raise
-    finally:
-        session.close()
-
-
-Base = declarative_base()
+from sqlalchemy import ForeignKeyConstraint, UniqueConstraint
+from database import Base
 
 
 class Input(Base):
@@ -113,4 +78,3 @@ class UsageStats(Base):
     pkpdb_downloads = Column(Integer)
     pypka_subs = Column(Integer)
     pkai_subs = Column(Integer)
-

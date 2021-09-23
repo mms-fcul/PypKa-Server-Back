@@ -26,3 +26,6 @@ class Jobqueue:
             if elem == subID:
                 return True
         return False
+
+    def all(self):
+        return [i.decode("utf-8") for i in self.redis_conn.lrange(self.queue, 0, -1)]

@@ -18,8 +18,17 @@ flask-socketio = "*"
 rq = "*"
 redis-server = "*"
 aiohttp = {extras = ["speedups"], version = "*"}
+pkai = "*"
+eventlet = "*"
+gevent = "*"
+gevent-websocket = "*"
+cchardet = "*"
+aiodns = "*"
+websockets = "*"
+supervisor = "*"
+tornado = "*"
 
 [dev-packages]
 
 [requires]
-python_version = "3.6"
+python_version = "3.8"

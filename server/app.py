@@ -1,7 +1,6 @@
 from flask import Flask, jsonify, request, send_file, Response, make_response
-from flask_cors import CORS, cross_origin
+from flask_cors import CORS
 
-import hashlib
 from pprint import pprint, pformat
 import datetime
 import os
@@ -17,12 +16,17 @@ from threading import Thread
 import traceback
 import json
 
-
 from pypka import Titration
 from pypka import __version__ as pypka_version
 from pypka.main import getTitrableSites
 
-import db
+from database import db_session, Base, engine
+from models import Residue, Results, Pk, Job, Protein, Input, UsageStats
+
+from pkpdb import retrieve_from_pkpdb, retrieve_pkpdb_titcurve, retrieve_pkpdb_pis
+from job_queue import Jobqueue
+
+Base.metadata.create_all(bind=engine)
 
 STATUS = "live"
 
@@ -40,46 +44,54 @@ app.config["CORS_HEADERS"] = "Content-Type"
 
 CORS(app, resources={r"/*": {"origins": "*"}})
 
+job_queue = Jobqueue()
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 config = dotenv_values(f"{dir_path}/../.env")
 
-import importlib.util
 
-spec = importlib.util.spec_from_file_location("pkpdb", config["PKPDB"])
-pkpdb = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(pkpdb)
-
-session = pkpdb.session
-Protein = pkpdb.Protein
-Residue = pkpdb.Residue
-Pk_sim = pkpdb.Pk_sim
-Pk = pkpdb.Pk
-
-from job_queue import Jobqueue
-
-job_queue = Jobqueue()
+@app.teardown_appcontext
+def shutdown_session(exception=None):
+    db_session.remove()
 
 
 def plus_one_pkpdb_downloads():
-    with db.session_scope() as session:
-        usage = session.query(db.UsageStats).first()
-        usage.pkpdb_downloads += 1
-        session.commit()
+    usage = db_session.query(UsageStats).first()
+    usage.pkpdb_downloads += 1
+    db_session.commit()
 
 
 def plus_one_pkpdb_queries():
-    with db.session_scope() as session:
-        usage = session.query(db.UsageStats).first()
-        usage.pkpdb_queries += 1
-        session.commit()
+    usage = db_session.query(UsageStats).first()
+    usage.pkpdb_queries += 1
+    db_session.commit()
 
 
 def plus_one_pypka_subs():
-    with db.session_scope() as session:
-        usage = session.query(db.UsageStats).first()
-        usage.pypka_subs += 1
-        session.commit()
+    usage = db_session.query(UsageStats).first()
+    usage.pypka_subs += 1
+    db_session.commit()
+
+
+@app.route("/stats")
+def get_stats():
+    stats = db_session.query(
+        UsageStats.pkpdb_queries,
+        UsageStats.pkpdb_downloads,
+        UsageStats.pypka_subs,
+        UsageStats.pkai_subs,
+    ).first()
+
+    response_dict = {
+        "pKPDB Queries": stats[0],
+        "pKPDB Downloads": stats[1],
+        "PypKa Jobs": stats[2],
+        "pKAI Jobs": stats[3],
+    }
+
+    response = jsonify(response_dict)
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
 
 
 @app.route("/isoelectric.csv.gz")
@@ -106,57 +118,6 @@ def hello():
     if STATUS:
         status = STATUS
     return jsonify({"status": status})
-
-
-def retrieve_from_pkpdb(idcode):
-    pid = session.query(Protein.pid).filter(Protein.idcode == idcode).first()
-    results = False
-    if pid:
-        pks = (
-            session.query(
-                Residue.chain, Residue.residue_type, Residue.residue_number, Pk.pk
-            )
-            .join(Protein, Protein.pid == Residue.pid)
-            .filter(Residue.resid == Pk.resid)
-            .filter(Protein.idcode == idcode)
-            .all()
-        )
-        if pks:
-            results = []
-            for pk in pks:
-                chain, resname, resnumb, pka = pk
-                if pka:
-                    pka = round(pka, 2)
-                else:
-                    pka = "-"
-                results.append((chain, resname, resnumb, pka))
-
-    return results
-
-
-def retrieve_pkpdb_titcurve(idcode):
-    pid = session.query(Protein.pid).filter(Protein.idcode == idcode).first()
-    tit_x = []
-    tit_y = []
-    if pid:
-        tit_curve = session.query(Pk_sim.tit_curve).filter(Pk_sim.pid == pid[0]).all()
-        if tit_curve:
-            for pH, prot in tit_curve[0][0].items():
-                tit_x.append(pH)
-                tit_y.append(round(prot, 2))
-
-    return tit_x, tit_y
-
-
-def retrieve_pkpdb_pis(idcode):
-    pid = session.query(Protein.pid).filter(Protein.idcode == idcode).first()
-    pi = None
-    if pid:
-        pis = session.query(Pk_sim.isoelectric_point).filter(Pk_sim.pid == pid[0]).all()
-        if pis:
-            pi = round(pis[0][0], 2)
-
-    return pi
 
 
 @app.route("/query/<idcode>")
@@ -219,7 +180,10 @@ def run(idcode):
     try:
         response_dict = run_pypka(parameters, subID)
     except Exception as e:
-        response_dict = {"PDBID": idcode, "Error": str(e)}
+        response_dict = {
+            "PDBID": idcode,
+            "Error": str(e)
+        }
         return jsonify(response_dict)
 
     response_dict = {"pKs": response_dict["pKas"]}
@@ -326,7 +290,7 @@ def run_pypka(parameters, subID, get_params=False):
     p.join()
     results = q.get()
 
-    logging.info(f"{subID} finished succesfully: {isinstance(results, Exception)}")
+    logging.info(f"{subID} finished succesfully: {not isinstance(results, Exception)}")
     logging.info(f"{subID} removed from the Queue")
     job_queue.pop()
 
@@ -537,141 +501,141 @@ def submit_pypka_job(job_params, sub_params, subID):
 
     pdbid, pdbfile, outputemail, nsites, nchains = sub_params
 
-    Job = db.Job
-    Protein = db.Protein
-    Input = db.Input
-    Residue = db.Residue
-    Results = db.Results
-    Pk = db.Pk
+    cur_date = datetime.datetime.today()
+    new_job = Job(dat_time=cur_date, email=outputemail, sub_id=subID)
+    db_session.add(new_job)
+    db_session.commit()
 
-    with db.session_scope() as session:
-        cur_date = datetime.datetime.today()
-        new_job = Job(dat_time=cur_date, email=outputemail, sub_id=subID)
-        session.add(new_job)
-        session.commit()
-
+    pid = None
+    if pdbid:
         pid = (
-            session.query(Protein.protein_id).filter(Protein.pdb_code == pdbid).first()
+            db_session.query(Protein.protein_id)
+            .filter(Protein.pdb_code == pdbid)
+            .first()
         )
-        if pid:
-            pid = pid[0]
-        else:
-            new_protein = Protein(
-                pdb_code=pdbid, pdb_file=pdbfile, nsites=nsites, nchains=nchains
-            )
-            session.add(new_protein)
-            session.commit()
-            pid = new_protein.protein_id
+    else:
+        pdbid = f"#{new_job.job_id}"
 
-        try:
-            response_dict, final_params = run_pypka(job_params, subID, get_params=True)
-            response_dict["error"] = None
-        except Exception as e:
-            tb = traceback.format_exc()
-            logging.error(tb)
-            response_dict = {"error": str(e)}
-
-        pdb_out = None
-        if "structure_output" in job_params and not response_dict["error"]:
-            with open(f"{dir_path}/pdbs_out/out_{subID}.pdb") as f:
-                pdb_out = f.read()
-        response_dict["pdb_out"] = pdb_out
-
-        logging.warning(response_dict["error"])
-
-        if response_dict["error"]:
-            with db.session_scope() as session:
-                logging.info(f"LOGGING ERROR of jobid #{new_job.job_id}")
-                new_results = Results(
-                    job_id=new_job.job_id,
-                    error=response_dict["error"],
-                )
-                session.add(new_results)
-                session.commit()
-
-                new_input = Input(job_id=new_job.job_id, protein_id=pid)
-                session.add(new_input)
-                session.commit()
-
-            return
-
-        to_keep = [
-            "CpHMD_mode",
-            "ffID",
-            "ff_family",
-            "ffinput",
-            "clean_pdb",
-            "LIPIDS",
-            "keep_ions",
-            "ser_thr_titration",
-            "cutoff",
-            "slice",
-        ]
-        pypka_params, delphi_params, mc_params = final_params
-        pypka_params = {
-            key: value for key, value in pypka_params.items() if key in to_keep
-        }
-
-        pypka_params["version"] = pypka_version
-        mc_params["pH_values"] = list(mc_params["pH_values"])
-
-        new_input = Input(
-            job_id=new_job.job_id,
-            protein_id=pid,
-            pypka_set=pypka_params,
-            pb_set=delphi_params,
-            mc_set=mc_params,
+    if pid:
+        pid = pid[0]
+    else:
+        new_protein = Protein(
+            pdb_code=pdbid, pdb_file=pdbfile, nsites=nsites, nchains=nchains
         )
-        session.add(new_input)
-        session.commit()
+        db_session.add(new_protein)
+        db_session.commit()
+        pid = new_protein.protein_id
 
-        logging.info(f'inserting {response_dict["pKas"]} pKa values')
+    try:
+        response_dict, final_params = run_pypka(job_params, subID, get_params=True)
+        response_dict["error"] = None
+    except Exception as e:
+        tb = traceback.format_exc()
+        logging.error(tb)
+        response_dict = {"error": str(e)}
 
-        for (chain, res_name, res_number, pK) in response_dict["pKas"]:
-            resid = (
-                session.query(Residue.res_id)
-                .filter(Residue.protein_id == pid)
-                .filter(Residue.res_name == res_name)
-                .filter(Residue.chain == chain)
-                .filter(Residue.res_number == res_number)
-                .first()
-            )
+    pdb_out = None
+    if "structure_output" in job_params and not response_dict["error"]:
+        with open(f"{dir_path}/pdbs_out/out_{subID}.pdb") as f:
+            pdb_out = f.read()
+    response_dict["pdb_out"] = pdb_out
 
-            if resid:
-                resid = resid[0]
-            else:
-                new_residue = Residue(
-                    protein_id=pid,
-                    res_name=res_name,
-                    chain=chain,
-                    res_number=res_number,
-                )
-                session.add(new_residue)
-                session.commit()
-                resid = new_residue.res_id
+    logging.warning(response_dict["error"])
 
-            if pK == "-":
-                pK = None
-
-            new_pk = Pk(job_id=new_job.job_id, res_id=resid, pk=pK)
-            session.add(new_pk)
-            session.commit()
-
-        logging.info(f"inserting Results")
-        pdb_out_ph = None
-        if "structure_output" in job_params:
-            logging.error(f'structure_out -> {job_params["structure_output"]}')
-            pdb_out_ph = job_params["structure_output"][1]
-
+    if response_dict["error"]:
+        logging.info(f"LOGGING ERROR of jobid #{new_job.job_id}")
         new_results = Results(
             job_id=new_job.job_id,
-            tit_curve=response_dict["titration"],
-            isoelectric_point=response_dict["pI"],
-            pdb_out=response_dict["pdb_out"],
-            pdb_out_ph=pdb_out_ph,
+            error=response_dict["error"],
         )
-        session.add(new_results)
-        session.commit()
+        db_session.add(new_results)
+        db_session.commit()
+        new_input = Input(job_id=new_job.job_id, protein_id=pid)
+        db_session.add(new_input)
+        db_session.commit()
+        return
+
+    logging.info(f"Handling parameters")
+
+    to_keep = [
+        "CpHMD_mode",
+        "ffID",
+        "ff_family",
+        "ffinput",
+        "clean_pdb",
+        "LIPIDS",
+        "keep_ions",
+        "ser_thr_titration",
+        "cutoff",
+        "slice",
+    ]
+    pypka_params, delphi_params, mc_params = final_params
+    pypka_params = {key: value for key, value in pypka_params.items() if key in to_keep}
+    pypka_params["version"] = pypka_version
+    if isinstance(mc_params["pH_values"], float):
+        mc_params["pH_values"] = [mc_params["pH_values"]]
+    else:
+        mc_params["pH_values"] = list(mc_params["pH_values"])
+
+    logging.info(f"Inserting into Input")
+
+    new_input = Input(
+        job_id=new_job.job_id,
+        protein_id=pid,
+        pypka_set=pypka_params,
+        pb_set=delphi_params,
+        mc_set=mc_params,
+    )
+    db_session.add(new_input)
+    db_session.commit()
+
+    logging.info(f'inserting {response_dict["pKas"]} pKa values')
+
+    for (chain, res_name, res_number, pK) in response_dict["pKas"]:
+        resid = (
+            db_session.query(Residue.res_id)
+            .filter(Residue.protein_id == pid)
+            .filter(Residue.res_name == res_name)
+            .filter(Residue.chain == chain)
+            .filter(Residue.res_number == res_number)
+            .first()
+        )
+
+        if resid:
+            resid = resid[0]
+        else:
+            new_residue = Residue(
+                protein_id=pid,
+                res_name=res_name,
+                chain=chain,
+                res_number=res_number,
+            )
+            db_session.add(new_residue)
+            db_session.commit()
+            resid = new_residue.res_id
+
+        if pK == "-":
+            pK = None
+
+        new_pk = Pk(job_id=new_job.job_id, res_id=resid, pk=pK)
+        db_session.add(new_pk)
+        db_session.commit()
+
+    logging.info(f"inserting Results")
+    pdb_out_ph = None
+    if "structure_output" in job_params:
+        logging.error(f'structure_out -> {job_params["structure_output"]}')
+        pdb_out_ph = job_params["structure_output"][1]
+
+    new_results = Results(
+        job_id=new_job.job_id,
+        tit_curve=response_dict["titration"],
+        isoelectric_point=response_dict["pI"],
+        pdb_out=response_dict["pdb_out"],
+        pdb_out_ph=pdb_out_ph,
+    )
+    db_session.add(new_results)
+    db_session.commit()
 
     # if outputemail:
     #    send_email(outputemail)
@@ -681,22 +645,28 @@ def submit_pypka_job(job_params, sub_params, subID):
 
 @app.route("/getSubmissions", methods=["POST", "GET"])
 def get_submission():
+    submission_IDS = (
+        db_session.query(Job.job_id, Job.dat_time, Protein.pdb_code, Job.sub_id)
+        .join(Input, Input.protein_id == Protein.protein_id)
+        .filter(Input.job_id == Job.job_id)
+        .order_by(Job.sub_id.desc())
+        .limit(25)
+        .all()
+    )
 
-    Job = db.Job
-    Protein = db.Protein
-    Input = db.Input
+    queued = job_queue.all()
+    logging.info(queued)
 
-    with db.session_scope() as session:
-        submission_IDS = (
-            session.query(Job.job_id, Job.dat_time, Protein.pdb_code, Job.sub_id)
-            .join(Input, Input.protein_id == Protein.protein_id)
-            .filter(Input.job_id == Job.job_id)
-            .order_by(Job.sub_id.desc())
-            .limit(25)
-            .all()
-        )
+    inprogress_IDS = (
+        db_session.query(Job.job_id, Job.dat_time, Job.sub_id)
+        .filter(Job.sub_id.in_(queued))
+        .all()
+    )
+    logging.info(inprogress_IDS)
 
-    response = jsonify([i[:] for i in submission_IDS])
+    sub_ids = [i[:] for i in submission_IDS]
+    queued_ids = [i[:2] + ("QUEUED", i[2]) for i in inprogress_IDS][::-1]
+    response = jsonify(queued_ids + sub_ids)
     response.headers.add("Access-Control-Allow-Origin", "*")
 
     # TODO: get job_id, protein_name, submission_datetime, pdb_out exists? bolean
@@ -765,4 +735,4 @@ PKPDB_PARAMS = {
 }
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", debug=True)
+    app.run(host="localhost", port="5555", debug=True)
