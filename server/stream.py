@@ -51,7 +51,7 @@ class EchoWebSocket(tornado.websocket.WebSocketHandler):
                 )
 
                 protein = (
-                    session.query(Protein.nchains, Protein.nsites)
+                    session.query(Protein.nchains, Protein.nsites, Protein.pdb_code, Protein.pdb_file)
                     .join(Input, Input.protein_id == Protein.protein_id)
                     .filter(Input.job_id == job_id)
                     .first()
@@ -67,7 +67,7 @@ class EchoWebSocket(tornado.websocket.WebSocketHandler):
 
                 if results:
                     tit_curve, pI, pdb_out, pdb_out_ph, error = results
-                    nchains, nsites = protein
+                    nchains, nsites, protein_name, pdb_file = protein
 
                     if error:
                         self.write_message(
@@ -78,6 +78,8 @@ class EchoWebSocket(tornado.websocket.WebSocketHandler):
                                     "nsites": nsites,
                                     "nchains": nchains,
                                     "status": "success",
+                                    "protein_name": protein_name,
+                                    "protein_pdb": pdb_file
                                 }
                             )
                         )
@@ -102,6 +104,7 @@ class EchoWebSocket(tornado.websocket.WebSocketHandler):
                     )
                     .filter(Residue.res_id == Pk.res_id)
                     .filter(Pk.job_id == job_id)
+                    .order_by(Residue.chain, Residue.res_number, Residue.res_name)
                     .all()
                 )
 
@@ -130,6 +133,8 @@ class EchoWebSocket(tornado.websocket.WebSocketHandler):
                         "params": all_params,
                         "pdb_out": pdb_out,
                         "outputFilepH": pdb_out_ph,
+                        "protein_name": protein_name,
+                        "original_pdb": pdb_file
                     }
 
                     self.write_message(
@@ -192,8 +197,9 @@ def make_app():
 
 def main(port):
     app = make_app()
-    app.listen(port)
-    # server = tornado.httpserver.HTTPServer(app)
+    # app.listen(port)
+    server = tornado.httpserver.HTTPServer(app)
+    server.listen(port)
     # server.bind(port)
     # server.start(0)  # forks one process per cpu
     tornado.ioloop.IOLoop.current().start()

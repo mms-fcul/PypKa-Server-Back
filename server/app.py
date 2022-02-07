@@ -180,10 +180,7 @@ def run(idcode):
     try:
         response_dict = run_pypka(parameters, subID)
     except Exception as e:
-        response_dict = {
-            "PDBID": idcode,
-            "Error": str(e)
-        }
+        response_dict = {"PDBID": idcode, "Error": str(e)}
         return jsonify(response_dict)
 
     response_dict = {"pKs": response_dict["pKas"]}
@@ -735,4 +732,4 @@ PKPDB_PARAMS = {
 }
 
 if __name__ == "__main__":
-    app.run(host="localhost", port="5555", debug=True)
+    app.run(host="127.0.0.1", debug=True)
