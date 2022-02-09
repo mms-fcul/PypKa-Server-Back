@@ -1,8 +1,10 @@
 
 CREATE TABLE protein (
     protein_id serial,
-    pdb_code character(4),
+    pdb_code character,
     pdb_file json NOT NULL,
+    nchains integer NOT NULL,
+    nsites integer NOT NULL,
     PRIMARY KEY (protein_id),
     UNIQUE (pdb_code)
 );
@@ -11,6 +13,7 @@ CREATE TABLE job (
     job_id serial,
     dat_time date NOT NULL,
     email text,
+    sub_id text NOT NULL,
     PRIMARY KEY (job_id)
 );
 
@@ -18,9 +21,9 @@ CREATE TABLE input (
     input_id serial,
     job_id integer,
     protein_id integer NOT NULL,
-    pb_set json NOT NULL,
-    mc_set json NOT NULL,
-    pypka_set json NOT NULL,
+    pb_set json,
+    mc_set json,
+    pypka_set json,
     PRIMARY KEY (job_id),
     FOREIGN KEY (job_id) REFERENCES job(job_id),
     FOREIGN KEY (protein_id) REFERENCES protein(protein_id)
@@ -32,6 +35,8 @@ CREATE TABLE results (
     tit_curve json,
     pdb_out json,
     error text,
+    isoelectric_point real,
+    pdb_out_ph real,
     PRIMARY KEY (job_id),
     FOREIGN KEY (job_id) REFERENCES job(job_id)
 );

@@ -1,30 +1,26 @@
-from flask import Flask, jsonify, request, send_file, Response, make_response
+from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-from pprint import pprint, pformat
+from pprint import pformat
 import datetime
 import os
 import smtplib
 import requests
 from dotenv import dotenv_values
-import time
-import sys
-from contextlib import contextmanager
 import logging
-from multiprocessing import Process, Queue
 from threading import Thread
 import traceback
-import json
+from contextlib import contextmanager
 
-from pypka import Titration
-from pypka import __version__ as pypka_version
 from pypka.main import getTitrableSites
 
 from database import db_session, Base, engine
-from models import Residue, Results, Pk, Job, Protein, Input, UsageStats
+from models import Job, Protein, Input, UsageStats
 
-from pkpdb import retrieve_from_pkpdb, retrieve_pkpdb_titcurve, retrieve_pkpdb_pis
-from job_queue import Jobqueue
+from slurm import create_slurm_file
+
+# from pkpdb import retrieve_from_pkpdb, retrieve_pkpdb_titcurve, retrieve_pkpdb_pis
+
 
 Base.metadata.create_all(bind=engine)
 
@@ -43,8 +39,6 @@ app.config["SECRET_KEY"] = str(datetime.datetime.today())
 app.config["CORS_HEADERS"] = "Content-Type"
 
 CORS(app, resources={r"/*": {"origins": "*"}})
-
-job_queue = Jobqueue()
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 config = dotenv_values(f"{dir_path}/../.env")
@@ -127,13 +121,13 @@ def pkpdb_query(idcode):
     else:
         plus_one_pkpdb_queries()
 
-    tit_x, tit_y = retrieve_pkpdb_titcurve(idcode)
+    # tit_x, tit_y = retrieve_pkpdb_titcurve(idcode)
 
     response_dict = {
-        "tit_x": tit_x,
-        "tit_y": tit_y,
-        "pKas": retrieve_from_pkpdb(idcode),
-        "pI": retrieve_pkpdb_pis(idcode),
+        # "tit_x": tit_x,
+        # "tit_y": tit_y,
+        # "pKas": retrieve_from_pkpdb(idcode),
+        # "pI": retrieve_pkpdb_pis(idcode),
         "params": pformat(PKPDB_PARAMS),
     }
 
@@ -144,7 +138,8 @@ def pkpdb_query(idcode):
 
 @app.route("/pkpdb/<idcode>", methods=["GET", "POST"])
 def exists_on_pkpdb(idcode):
-    results = retrieve_from_pkpdb(idcode)
+    # results = retrieve_from_pkpdb(idcode)
+    results = False
     if results and len(results) > 0:
         results = True
     response = jsonify(results)
@@ -152,163 +147,50 @@ def exists_on_pkpdb(idcode):
     return response
 
 
-@app.route("/run/<idcode>")
-def run(idcode):
-
-    subID = get_subID(request)
-
-    r = requests.get(f"https://files.rcsb.org/download/{idcode}.pdb")
-    pdb_content = r.content.decode("utf-8")
-    if "The requested URL was not found on this server." in pdb_content:
-        return f"Error: {idcode} not found"
-
-    newfilename = save_pdb(pdb_content, subID)
-
-    parameters = {
-        "structure": newfilename,
-        "epsin": 15,
-        "ionicstr": 0.1,
-        "convergence": 0.1,
-        "pbc_dimensions": 0,
-        "ncpus": 1,
-        "clean": True,
-        "ser_thr_titration": False,
-        "titration_output": f"{dir_path}/titrations/titration_{subID}.out",
-        "output": f"{dir_path}/pkas/pKas_{subID}.out",
-    }
-
-    try:
-        response_dict = run_pypka(parameters, subID)
-    except Exception as e:
-        response_dict = {"PDBID": idcode, "Error": str(e)}
-        return jsonify(response_dict)
-
-    response_dict = {"pKs": response_dict["pKas"]}
-    response_dict["PDBID"] = idcode
-    response = jsonify(response_dict)
-    response.headers.add("Access-Control-Allow-Origin", "*")
-    return response
-
-
-def fileno(file_or_fd):
-    fd = getattr(file_or_fd, "fileno", lambda: file_or_fd)()
-    if not isinstance(fd, int):
-        raise ValueError("Expected a file (`.fileno()`) or a file descriptor")
-    return fd
-
-
-@contextmanager
-def stdout_redirected(to=os.devnull, stdout=None):
-    if stdout is None:
-        stdout = sys.stdout
-
-    stdout_fd = fileno(stdout)
-    with os.fdopen(os.dup(stdout_fd), "wb") as copied:
-        stdout.flush()
-        try:
-            os.dup2(fileno(to), stdout_fd)
-        except ValueError:
-            with open(to, "wb") as to_file:
-                os.dup2(to_file.fileno(), stdout_fd)
-        try:
-            yield stdout
-        finally:
-            stdout.flush()
-            os.dup2(copied.fileno(), stdout_fd)
+# @app.route("/run/<idcode>")
+# def run(idcode):
+#
+#     subID = get_subID(request)
+#
+#     r = requests.get(f"https://files.rcsb.org/download/{idcode}.pdb")
+#     pdb_content = r.content.decode("utf-8")
+#     if "The requested URL was not found on this server." in pdb_content:
+#         return f"Error: {idcode} not found"
+#
+#     newfilename = save_pdb(pdb_content, subID)
+#
+#     parameters = {
+#         "structure": newfilename,
+#         "epsin": 15,
+#         "ionicstr": 0.1,
+#         "convergence": 0.1,
+#         "pbc_dimensions": 0,
+#         "ncpus": 1,
+#         "clean": True,
+#         "ser_thr_titration": False,
+#         "titration_output": f"{dir_path}/titrations/titration_{subID}.out",
+#         "output": f"{dir_path}/pkas/pKas_{subID}.out",
+#     }
+#
+#     try:
+#         response_dict = run_pypka(parameters, subID)
+#     except Exception as e:
+#         response_dict = {"PDBID": idcode, "Error": str(e)}
+#         return jsonify(response_dict)
+#
+#     response_dict = {"pKs": response_dict["pKas"]}
+#     response_dict["PDBID"] = idcode
+#     response = jsonify(response_dict)
+#     response.headers.add("Access-Control-Allow-Origin", "*")
+#     return response
 
 
 @app.route("/queue-size")
 def get_queue_size():
-    response = jsonify(len(job_queue))
+    # response = jsonify(len(job_queue))
+    response = jsonify(0)
     response.headers.add("Access-Control-Allow-Origin", "*")
     return response
-
-
-def launch_pypka_process(subID, params, queue):
-    new_dir = f"/tmp/tmp_{subID}"
-    os.mkdir(new_dir)
-    os.chdir(new_dir)
-    try:
-        with open(f"LOG_{subID}", "a") as f, stdout_redirected(f):
-            tit = Titration(params)
-
-        tit_x = []
-        tit_y = []
-        for pH, prot in tit.getTitrationCurve().items():
-            tit_x.append(pH)
-            tit_y.append(prot)
-
-        pKs = []
-        for site in tit:
-            pK = site.pK
-            if pK:
-                pK = round(site.pK, 2)
-            else:
-                pK = "-"
-
-            res_number = site.getResNumber()
-
-            pKs.append([site.molecule.chain, site.res_name, res_number, pK])
-
-        params = tit.getParameters()
-        params_dicts = tit.getParametersDict()
-        pI = tit.getIsoelectricPoint()
-
-        if type(pI) == tuple:
-            pI, limit, charge = pI
-
-        queue.put((tit_x, tit_y, pKs, params, params_dicts, pI))
-
-    except Exception as e:
-        queue.put(e)
-
-
-def run_pypka(parameters, subID, get_params=False):
-    """"""
-    logging.info(f"{subID} added to the Queue")
-    job_queue.add(subID)
-
-    while job_queue.top() != subID:
-        time.sleep(2)
-        logging.info(f"{job_queue.top()} {subID}")
-
-    logging.info(f"{subID} started")
-
-    q = Queue()
-    p = Process(
-        target=launch_pypka_process,
-        args=(
-            subID,
-            parameters,
-            q,
-        ),
-    )
-    p.start()
-    p.join()
-    results = q.get()
-
-    logging.info(f"{subID} finished succesfully: {not isinstance(results, Exception)}")
-    logging.info(f"{subID} removed from the Queue")
-    job_queue.pop()
-
-    logging.info(results)
-
-    if isinstance(results, Exception):
-        raise results
-    else:
-        tit_x, tit_y, pKs, params, params_dicts, pI = results
-
-    response_dict = {
-        "titration": [tit_x, tit_y],
-        "pKas": pKs,
-        "parameters": params,
-        "pI": round(pI, 2),
-    }
-
-    if get_params:
-        return response_dict, params_dicts
-    else:
-        return response_dict
 
 
 def send_email(outputemail):
@@ -523,121 +405,10 @@ def submit_pypka_job(job_params, sub_params, subID):
         db_session.commit()
         pid = new_protein.protein_id
 
-    try:
-        response_dict, final_params = run_pypka(job_params, subID, get_params=True)
-        response_dict["error"] = None
-    except Exception as e:
-        tb = traceback.format_exc()
-        logging.error(tb)
-        response_dict = {"error": str(e)}
+    # TODO: SUBMIT TO SLURM
+    create_slurm_file(job_params, subID, new_job.job_id, pid)
 
-    pdb_out = None
-    if "structure_output" in job_params and not response_dict["error"]:
-        with open(f"{dir_path}/pdbs_out/out_{subID}.pdb") as f:
-            pdb_out = f.read()
-    response_dict["pdb_out"] = pdb_out
-
-    logging.warning(response_dict["error"])
-
-    if response_dict["error"]:
-        logging.info(f"LOGGING ERROR of jobid #{new_job.job_id}")
-        new_results = Results(
-            job_id=new_job.job_id,
-            error=response_dict["error"],
-        )
-        db_session.add(new_results)
-        db_session.commit()
-        new_input = Input(job_id=new_job.job_id, protein_id=pid)
-        db_session.add(new_input)
-        db_session.commit()
-        return
-
-    logging.info(f"Handling parameters")
-
-    to_keep = [
-        "CpHMD_mode",
-        "ffID",
-        "ff_family",
-        "ffinput",
-        "clean_pdb",
-        "LIPIDS",
-        "keep_ions",
-        "ser_thr_titration",
-        "cutoff",
-        "slice",
-    ]
-    pypka_params, delphi_params, mc_params = final_params
-    pypka_params = {key: value for key, value in pypka_params.items() if key in to_keep}
-    pypka_params["version"] = pypka_version
-    if isinstance(mc_params["pH_values"], float):
-        mc_params["pH_values"] = [mc_params["pH_values"]]
-    else:
-        mc_params["pH_values"] = list(mc_params["pH_values"])
-
-    logging.info(f"Inserting into Input")
-
-    new_input = Input(
-        job_id=new_job.job_id,
-        protein_id=pid,
-        pypka_set=pypka_params,
-        pb_set=delphi_params,
-        mc_set=mc_params,
-    )
-    db_session.add(new_input)
-    db_session.commit()
-
-    logging.info(f'inserting {response_dict["pKas"]} pKa values')
-
-    for (chain, res_name, res_number, pK) in response_dict["pKas"]:
-        resid = (
-            db_session.query(Residue.res_id)
-            .filter(Residue.protein_id == pid)
-            .filter(Residue.res_name == res_name)
-            .filter(Residue.chain == chain)
-            .filter(Residue.res_number == res_number)
-            .first()
-        )
-
-        if resid:
-            resid = resid[0]
-        else:
-            new_residue = Residue(
-                protein_id=pid,
-                res_name=res_name,
-                chain=chain,
-                res_number=res_number,
-            )
-            db_session.add(new_residue)
-            db_session.commit()
-            resid = new_residue.res_id
-
-        if pK == "-":
-            pK = None
-
-        new_pk = Pk(job_id=new_job.job_id, res_id=resid, pk=pK)
-        db_session.add(new_pk)
-        db_session.commit()
-
-    logging.info(f"inserting Results")
-    pdb_out_ph = None
-    if "structure_output" in job_params:
-        logging.error(f'structure_out -> {job_params["structure_output"]}')
-        pdb_out_ph = job_params["structure_output"][1]
-
-    new_results = Results(
-        job_id=new_job.job_id,
-        tit_curve=response_dict["titration"],
-        isoelectric_point=response_dict["pI"],
-        pdb_out=response_dict["pdb_out"],
-        pdb_out_ph=pdb_out_ph,
-    )
-    db_session.add(new_results)
-    db_session.commit()
-
-    # if outputemail:
-    #    send_email(outputemail)
-
-    logging.info(f"{subID} exiting")
+    logging.info(f"{subID} submitted to SLURM")
 
 
 @app.route("/getSubmissions", methods=["POST", "GET"])
@@ -650,23 +421,23 @@ def get_submission():
         .limit(25)
         .all()
     )
-
-    queued = job_queue.all()
-    logging.info(queued)
-
-    inprogress_IDS = (
-        db_session.query(Job.job_id, Job.dat_time, Job.sub_id)
-        .filter(Job.sub_id.in_(queued))
-        .all()
-    )
-    logging.info(inprogress_IDS)
-
     sub_ids = [i[:] for i in submission_IDS]
-    queued_ids = [i[:2] + ("QUEUED", i[2]) for i in inprogress_IDS][::-1]
-    response = jsonify(queued_ids + sub_ids)
-    response.headers.add("Access-Control-Allow-Origin", "*")
 
-    # TODO: get job_id, protein_name, submission_datetime, pdb_out exists? bolean
+    # TODO: GET SLURM QUEUED
+    # queued = job_queue.all()
+    # logging.info(queued)
+    #
+    # inprogress_IDS = (
+    #     db_session.query(Job.job_id, Job.dat_time, Job.sub_id)
+    #     .filter(Job.sub_id.in_(queued))
+    #     .all()
+    # )
+    # logging.info(inprogress_IDS)
+    # queued_ids = [i[:2] + ("QUEUED", i[2]) for i in inprogress_IDS][::-1]
+
+    # response = jsonify(queued_ids + sub_ids)
+    response = jsonify(sub_ids)
+    response.headers.add("Access-Control-Allow-Origin", "*")
 
     return response
 
