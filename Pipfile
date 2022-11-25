@@ -5,7 +5,6 @@ name = "pypi"
 
 [packages]
 pypka = "*"
-flask = "*"
 flask-cors = "*"
 wheel = "*"
 gunicorn = "*"
@@ -27,6 +26,13 @@ aiodns = "*"
 websockets = "*"
 supervisor = "*"
 tornado = "*"
+sse-starlette = "*"
+asyncio = "*"
+aioflask = "*"
+flask = {extras = ["async"], version = "*"}
+fastapi = {extras = ["all"], version = "*"}
+flask-sse = "*"
+uvicorn = "*"
 
 [dev-packages]
 

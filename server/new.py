@@ -1,29 +1,50 @@
-import tornado.ioloop
-import tornado.websocket
-import subprocess
 import os
-import sys
+import asyncio
+from fastapi import FastAPI, Request
+from sse_starlette.sse import EventSourceResponse
+from fastapi.middleware.cors import CORSMiddleware
+import subprocess
 from database import db_session
 from models import Job, Results, Residue, Pk, Input, Protein
-import logging
 from pprint import pformat
+import json
 
-logging.basicConfig(
-    filename="/home/pedror/PypKa-Server-Back/server/socket.log", level=logging.DEBUG
+app = FastAPI()
+
+origins = [
+    "http://pypka.org",
+    "https://pypka.org",
+    "http://localhost",
+    "https://localhost",
+    "http://localhost:8000",
+    "https://localhost:8000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-import json
+
+STREAM_DELAY = 1  # second
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
 
-class EchoWebSocket(tornado.websocket.WebSocketHandler):
-    def open(self):
-        print("WebSocket opened")
+@app.get("/")
+async def home():
+    return {"message": "ALIVE!"}
 
-    def on_message(self, message):
-        subID = message
 
+@app.get("/stream")
+async def message_stream(request: Request, subID: str):
+    """Stream subID log"""
+
+    def check_logs(subID):
+        # subID = str(subID)
         print(f"RECEIVED {subID}")
 
         with db_session() as session:
@@ -80,20 +101,15 @@ class EchoWebSocket(tornado.websocket.WebSocketHandler):
                     nchains, nsites, protein_name, pdb_file = protein
 
                     if error:
-                        self.write_message(
-                            json.dumps(
-                                {
-                                    "content": {"failed": True, "log": error},
-                                    "subID": subID,
-                                    "nsites": nsites,
-                                    "nchains": nchains,
-                                    "status": "success",
-                                    "protein_name": protein_name,
-                                    "protein_pdb": pdb_file,
-                                }
-                            )
-                        )
-                        return
+                        return {
+                            "content": {"failed": True, "log": error},
+                            "subID": subID,
+                            "nsites": nsites,
+                            "nchains": nchains,
+                            "status": "success",
+                            "protein_name": protein_name,
+                            "protein_pdb": pdb_file,
+                        }
 
                     (tit_x, tit_y) = tit_curve
 
@@ -141,22 +157,17 @@ class EchoWebSocket(tornado.websocket.WebSocketHandler):
                         "proteinDielectric": epsin,
                         "solventDielectric": epssol,
                         "params": all_params,
-                        "pdb_out": pdb_out,
+                        "pdb_out": True if pdb_out else False,
                         "outputFilepH": pdb_out_ph,
                         "protein_name": protein_name,
-                        "original_pdb": pdb_file,
+                        "original_pdb": True if pdb_file else False,
                     }
 
-                    self.write_message(
-                        json.dumps(
-                            {
-                                "content": response_dict,
-                                "subID": subID,
-                                "status": "success",
-                            }
-                        )
-                    )
-                    return
+                    return {
+                        "content": response_dict,
+                        "subID": subID,
+                        "status": "success",
+                    }
 
         logpath = f"{dir_path}/submissions/{subID}.out"
         # logpath = f"/tmp/tmp_{subID}/LOG_{subID}"
@@ -182,41 +193,27 @@ class EchoWebSocket(tornado.websocket.WebSocketHandler):
                         content.append(line)
                 content = "\n".join(content)
 
-        self.write_message(
-            json.dumps(
-                {
-                    "content": content if content else None,
-                    "subID": subID,
-                    "status": "running",
-                }
-            )
-        )
+        return {
+            "content": content if content else None,
+            "subID": subID,
+            "status": "running",
+        }
 
-    def on_close(self):
-        print("WebSocket closed")
+    async def event_generator(subID):
+        while True:
+            # If client closes connection, stop sending events
+            if await request.is_disconnected():
+                break
 
-    def check_origin(self, origin):
-        return True
+            # Checks for new messages and return them to client if any
+            yield {
+                "event": "new_message",
+                "id": "message_id",
+                "data": json.dumps(check_logs(subID)),
+            }
 
+            await asyncio.sleep(STREAM_DELAY)
 
-def make_app():
-    return tornado.web.Application(
-        [
-            (r"/", EchoWebSocket),
-        ]
+    return EventSourceResponse(
+        event_generator(subID), headers={"Cache-Control": "public, max-age=29"}
     )
-
-
-def main(port):
-    app = make_app()
-    # app.listen(port)
-    server = tornado.httpserver.HTTPServer(app)
-    server.listen(port)
-    # server.bind(port)
-    # server.start(0)  # forks one process per cpu
-    tornado.ioloop.IOLoop.current().start()
-
-
-if __name__ == "__main__":
-    port = sys.argv[1]
-    main(port)

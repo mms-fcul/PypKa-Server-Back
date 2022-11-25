@@ -22,6 +22,7 @@ class Job(Base):
     job_id = Column(Integer, primary_key=True)
     sub_id = Column(Text, nullable=False)
     dat_time = Column(Date, nullable=False)
+    dat_time_finish = Column(Date, nullable=False)
     email = Column(Text)
 
 

@@ -11,7 +11,8 @@ CREATE TABLE protein (
 
 CREATE TABLE job (
     job_id serial,
-    dat_time date NOT NULL,
+    dat_time timestamp NOT NULL,
+    dat_time_finish timestamp,
     email text,
     sub_id text NOT NULL,
     PRIMARY KEY (job_id)

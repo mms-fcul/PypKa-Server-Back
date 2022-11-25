@@ -1,26 +1,38 @@
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, request
 from flask_cors import CORS
-
+import requests
 from pprint import pformat
 import datetime
 import os
 import smtplib
-import requests
 from dotenv import dotenv_values
 import logging
 from threading import Thread
 import traceback
-from contextlib import contextmanager
+
+import json
 
 from pypka.main import getTitrableSites
 
 from database import db_session, Base, engine
-from models import Job, Protein, Input, UsageStats
+from models import Job, Protein, Input, UsageStats, Results
 
 from slurm import create_slurm_file
+from pka2pI import pkas_2_titcurve, titcurve_2_pI, exclude_cys
+
+from pkai.pKAI import pKAI
 
 # from pkpdb import retrieve_from_pkpdb, retrieve_pkpdb_titcurve, retrieve_pkpdb_pis
 
+import pandas as pd
+
+df_pkpdb_pkas = pd.read_csv("static/pkas.csv.gz", header=0, sep=";", compression="gzip")
+df_pkpdb_pI = pd.read_csv(
+    "static/isoelectric.csv.gz", header=0, sep=";", compression="gzip"
+)
+df_pkpdb_titcurves = pd.read_csv(
+    "static/titrationcurves.csv.gz", header=0, sep=";", compression="gzip"
+)
 
 Base.metadata.create_all(bind=engine)
 
@@ -47,6 +59,7 @@ config = dotenv_values(f"{dir_path}/../.env")
 @app.teardown_appcontext
 def shutdown_session(exception=None):
     db_session.remove()
+    # print(engine.pool.status())
 
 
 def plus_one_pkpdb_downloads():
@@ -121,15 +134,31 @@ def pkpdb_query(idcode):
     else:
         plus_one_pkpdb_queries()
 
-    # tit_x, tit_y = retrieve_pkpdb_titcurve(idcode)
+    idcode = idcode.lower()
 
-    response_dict = {
-        # "tit_x": tit_x,
-        # "tit_y": tit_y,
-        # "pKas": retrieve_from_pkpdb(idcode),
-        # "pI": retrieve_pkpdb_pis(idcode),
-        "params": pformat(PKPDB_PARAMS),
-    }
+    df_protein_results = df_pkpdb_pkas.query(f"idcode == '{idcode}'").sort_values(
+        ["chain", "residue_number"]
+    )
+    if len(df_protein_results) > 0:
+        results_list = df_protein_results[
+            ["chain", "residue_name", "residue_number", "pk"]
+        ].values.tolist()
+
+        tit_curve = json.loads(
+            df_pkpdb_titcurves.query(f"idcode == '{idcode}'").values.tolist()[0][2]
+        )
+        tit_x, tit_y = list(tit_curve.keys()), list(tit_curve.values())
+
+        response_dict = {
+            "tit_x": tit_x,
+            "tit_y": tit_y,
+            "pI": df_pkpdb_pI.query(f"idcode == '{idcode}'").values.tolist()[0][2],
+            "pKas": results_list,
+            "params": pformat(PKPDB_PARAMS),
+        }
+
+    else:
+        response_dict = {}
 
     response = jsonify(response_dict)
     response.headers.add("Access-Control-Allow-Origin", "*")
@@ -138,11 +167,95 @@ def pkpdb_query(idcode):
 
 @app.route("/pkpdb/<idcode>", methods=["GET", "POST"])
 def exists_on_pkpdb(idcode):
-    # results = retrieve_from_pkpdb(idcode)
-    results = False
-    if results and len(results) > 0:
+    results = df_pkpdb_pkas.query(f"idcode == '{idcode}'")
+    if len(results) > 0:
         results = True
+    else:
+        results = False
     response = jsonify(results)
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
+
+
+def run_pKAI(pdb):
+    results = pKAI(pdb, model_name="pKAI", device="cpu", threads=2)
+    return [[i[0], i[2], i[1], i[3]] for i in results]
+
+
+@app.route("/pKAI/<idcode>", methods=["GET", "POST"])
+def run_pKAI_idcode(idcode):
+
+    subID = get_subID(request)
+
+    r = requests.get(f"https://files.rcsb.org/download/{idcode}.pdb")
+    pdb_content = r.content.decode("utf-8")
+    if "The requested URL was not found on this server." in pdb_content:
+        results = f"Error: {idcode} not found"
+
+    else:
+        newfilename = save_pdb(pdb_content, subID)
+
+        results = run_pKAI(newfilename)
+
+    response = jsonify(results)
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response
+
+
+@app.route("/pkas/<idcode>", methods=["GET", "POST"])
+def get_pkas_from_idcode(idcode):
+    idcode = idcode.lower()
+    subID = get_subID(request)
+
+    df_protein_results = df_pkpdb_pkas.query(f"idcode == '{idcode}'").sort_values(
+        ["chain", "residue_number"]
+    )
+    if len(df_protein_results) > 0:
+        results_list = df_protein_results[
+            ["chain", "residue_name", "residue_number", "pk"]
+        ].values.tolist()
+        response_dict = {
+            "idcode": idcode.upper(),
+            "method": "PypKa (pKPDB)",
+            "pdb": f"https://files.rcsb.org/download/{idcode}.pdb",
+            "pI": df_pkpdb_pI.query(f"idcode == '{idcode}'").values.tolist()[0][2],
+            "pKs": results_list,
+            "tit_curve": json.loads(
+                df_pkpdb_titcurves.query(f"idcode == '{idcode}'").values.tolist()[0][2]
+            ),
+        }
+        return jsonify(response_dict)
+
+    # PDB IDCODE
+    if len(idcode) == 4:
+        r = requests.get(f"https://files.rcsb.org/download/{idcode}.pdb")
+        pdb_content = r.content.decode("utf-8")
+    else:
+        idcode_upper = idcode.upper()
+        r = requests.get(
+            f"https://alphafold.ebi.ac.uk/files/AF-{idcode_upper}-F1-model_v4.pdb"
+        )
+        pdb_content = r.content.decode("utf-8")
+
+    if "ATOM " not in pdb_content:
+        return f"Error: {idcode} not found"
+
+    newfilename = save_pdb(pdb_content, subID)
+
+    try:
+        # Run pKAI
+        results_list = run_pKAI(newfilename)
+        response_dict = {
+            "idcode": idcode.upper(),
+            "method": "pKAI 1.0",
+            "pdb": f"https://alphafold.ebi.ac.uk/files/AF-{idcode_upper}-F1-model_v4.pdb",
+            "pKs": results_list,
+        }
+    except Exception as e:
+        response_dict = {"idcode": idcode, "Error": str(e)}
+        return jsonify(response_dict)
+
+    response = jsonify(response_dict)
     response.headers.add("Access-Control-Allow-Origin", "*")
     return response
 
@@ -318,6 +431,8 @@ def submitCalculation():
 
     outputemail = request.json["email"]
 
+    model = request.json["model"]
+
     subID = get_subID(request)
 
     newfilename = save_pdb(pdbfile, subID)
@@ -327,11 +442,27 @@ def submitCalculation():
     else:
         pH = str(outputfilepH)
 
-    if on_PKPDB and default_parameters and not outputfile:
+    if model == "pkai":
+        results = run_pKAI(newfilename)
+        results = exclude_cys(newfilename, results)
+        tit_x, tit_y = pkas_2_titcurve(newfilename, results)
+        pI = titcurve_2_pI(tit_x, tit_y)
+        response = jsonify(
+            {
+                "pKas": results,
+                "tit_x": tit_x,
+                "tit_y": tit_y,
+                "pI": round(pI, 2),
+                "params": pformat(PKPDB_PARAMS),
+            }
+        )
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response
+
+    elif on_PKPDB and default_parameters and not outputfile:
         response = pkpdb_query(pdbid)
 
         return response
-
     else:
         parameters = {
             "structure": newfilename,
@@ -379,7 +510,6 @@ def submit_pypka_job(job_params, sub_params, subID):
     plus_one_pypka_subs()
 
     pdbid, pdbfile, outputemail, nsites, nchains = sub_params
-
     cur_date = datetime.datetime.today()
     new_job = Job(dat_time=cur_date, email=outputemail, sub_id=subID)
     db_session.add(new_job)
@@ -394,7 +524,6 @@ def submit_pypka_job(job_params, sub_params, subID):
         )
     else:
         pdbid = f"#{new_job.job_id}"
-
     if pid:
         pid = pid[0]
     else:
@@ -405,10 +534,9 @@ def submit_pypka_job(job_params, sub_params, subID):
         db_session.commit()
         pid = new_protein.protein_id
 
-    # TODO: SUBMIT TO SLURM
-    create_slurm_file(job_params, subID, new_job.job_id, pid)
-
-    logging.info(f"{subID} submitted to SLURM")
+    job_id = new_job.job_id
+    db_session.close()
+    create_slurm_file(job_params, subID, job_id, pid)
 
 
 @app.route("/getSubmissions", methods=["POST", "GET"])
@@ -423,44 +551,45 @@ def get_submission():
     )
     sub_ids = [i[:] for i in submission_IDS]
 
-    # TODO: GET SLURM QUEUED
-    # queued = job_queue.all()
-    # logging.info(queued)
-    #
-    # inprogress_IDS = (
-    #     db_session.query(Job.job_id, Job.dat_time, Job.sub_id)
-    #     .filter(Job.sub_id.in_(queued))
-    #     .all()
-    # )
-    # logging.info(inprogress_IDS)
-    # queued_ids = [i[:2] + ("QUEUED", i[2]) for i in inprogress_IDS][::-1]
+    # queued = []
+    # sbrun = subprocess.run(f"s-id pedror | grep slurm_", shell=True, capture_output=True)
+    # slurm_queue = sbrun.stdout.decode("utf-8").strip()
+    # for line in slurm_queue.splitlines():
+    #    subID = line.split()[-1].replace('.py', '').replace('slurm_', '')
+    #    queued.append(subID)
 
-    # response = jsonify(queued_ids + sub_ids)
-    response = jsonify(sub_ids)
+    finished = db_session.query(Results.job_id)
+
+    inprogress_IDS = (
+        db_session.query(Job.job_id, Job.dat_time, Job.sub_id)
+        .filter(Job.job_id.not_in(finished))
+        .all()
+    )
+    queued_ids = [i[:2] + ("QUEUED", i[2]) for i in inprogress_IDS][::-1]
+
+    response = jsonify(queued_ids + sub_ids)
     response.headers.add("Access-Control-Allow-Origin", "*")
 
     return response
 
 
-@app.route("/getFile", methods=["POST"])
-def get_file(path):
+@app.route("/getFile", methods=["GET", "POST"])
+def get_file():
     subID = request.json["subID"]
-    ftype = request.json["ftype"]
+    ftype = request.json["file_type"]
 
-    # TODO: get correct variable from the database
+    if ftype == "original_pdb":
+        fname = f"{dir_path}/pdbs/{subID}.pdb"
+    elif ftype == "pdb_out":
+        fname = f"{dir_path}/pdbs_out/out_{subID}.pdb"
 
-    # TODO: format the variable accordingly to download as file
-    if ftype == "titration":
-        pass
-    elif ftype == "parameters":
-        pass
-    elif ftype == "pKas":
-        pass
-    elif ftype == "mdpdb":
-        pass
+    with open(fname) as f:
+        content = f.read()
 
-    fname = "test_file"
-    return send_file(fname, cache_timeout=36000)
+    response = jsonify(content)
+    response.headers.add("Access-Control-Allow-Origin", "*")
+
+    return response
 
 
 PKPDB_PARAMS = {
@@ -503,4 +632,5 @@ PKPDB_PARAMS = {
 }
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", debug=True)
+    # app.run(host="127.0.0.1", debug=True)
+    app.run(host="0.0.0.0", port="5000")
