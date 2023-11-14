@@ -5,8 +5,15 @@ subs.txt
 *csv.gz
 LOG*
 ACCESS*
+ERROR_SERVER
 __pycache__
+Pipfile.lock
 passemail.py
 .env
 server/submissions/20*
 server/submissions/slurm_*
+server/titrations/*out
+server/pdbs/*out
+server/pdbs_out/*out
+server/pkas/*out
+server/static/

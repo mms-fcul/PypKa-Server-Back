@@ -18,20 +18,25 @@ from database import db_session, Base, engine
 from models import Job, Protein, Input, UsageStats, Results
 
 from slurm import create_slurm_file
-from pka2pI import pkas_2_titcurve, titcurve_2_pI, exclude_cys
+from pka2pI import pkas_2_titcurve, titcurve_2_pI, exclude_cys, pkas_2_pdb, clean_pdb
 
 from pkai.pKAI import pKAI
 
 # from pkpdb import retrieve_from_pkpdb, retrieve_pkpdb_titcurve, retrieve_pkpdb_pis
 
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+
+
 import pandas as pd
 
-df_pkpdb_pkas = pd.read_csv("static/pkas.csv.gz", header=0, sep=";", compression="gzip")
+df_pkpdb_pkas = pd.read_csv("static/pkas.csv", header=0, sep=";") # , compression="gzip"
 df_pkpdb_pI = pd.read_csv(
-    "static/isoelectric.csv.gz", header=0, sep=";", compression="gzip"
+    "static/isoelectric.csv", header=0, sep=";" # , compression="gzip"
 )
 df_pkpdb_titcurves = pd.read_csv(
-    "static/titrationcurves.csv.gz", header=0, sep=";", compression="gzip"
+    "static/titrationcurves.csv", header=0, sep=";" # , compression="gzip"
 )
 
 Base.metadata.create_all(bind=engine)
@@ -54,6 +59,13 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 config = dotenv_values(f"{dir_path}/../.env")
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["500 per hour"],
+    storage_uri="memory://",
+)
 
 
 @app.teardown_appcontext
@@ -86,7 +98,7 @@ def get_stats():
         UsageStats.pkpdb_queries,
         UsageStats.pkpdb_downloads,
         UsageStats.pypka_subs,
-        UsageStats.pkai_subs,
+        UsageStats.pKAI_subs,
     ).first()
 
     response_dict = {
@@ -101,33 +113,55 @@ def get_stats():
     return response
 
 
-@app.route("/isoelectric.csv.gz")
+@app.route("/isoelectric.csv")
+@limiter.limit("10 per hour")
 def export_pis():
     plus_one_pkpdb_downloads()
-    return app.send_static_file("isoelectric.csv.gz")
+    return app.send_static_file("isoelectric.csv")
 
 
-@app.route("/pkas.csv.gz")
+@app.route("/pkas.csv")
+@limiter.limit("10 per hour")
 def export_pkas():
     plus_one_pkpdb_downloads()
-    return app.send_static_file("pkas.csv.gz")
+    return app.send_static_file("pkas.csv")
 
 
-@app.route("/similarity090.csv.gz")
+@app.route("/similarity090.csv")
+@limiter.limit("10 per hour")
 def export_clusters():
     plus_one_pkpdb_downloads()
-    return app.send_static_file("similarity090.csv.gz")
+    return app.send_static_file("similarity090.csv")
 
+
+@app.route("/test")
+@limiter.limit("2 per hour")
+def test():
+    return jsonify({"status": "live"})
 
 @app.route("/")
+@limiter.limit("100 per hour")
 def hello():
     status = "live"
     if STATUS:
         status = STATUS
-    return jsonify({"status": status})
+    return jsonify({
+        "status": status,
+        "endpoints": """
+        /pkas/<idcode>     GET/POST    Retrieves the results from the pKPDB if available, and runs a pKAI calculation otherwise
+                           Example: https://api.pypka.org/pkas/4LZT
+        
+        /pkpdb/<idcode>    GET/POST    Queries the pKPDB database
+                           Example: https://api.pypka.org/pkpdb/4LZT
+
+        /pKAI/<idcode>     GET/POST    Runs a pKAI calculation
+                           Example: https://api.pypka.org/pkpdb/4LZT
+        """,
+    })
 
 
 @app.route("/query/<idcode>")
+@limiter.limit("100 per hour")
 def pkpdb_query(idcode):
     if idcode == "CRON_JOB":
         idcode = "4lzt"
@@ -166,8 +200,9 @@ def pkpdb_query(idcode):
 
 
 @app.route("/pkpdb/<idcode>", methods=["GET", "POST"])
+@limiter.limit("100 per hour")
 def exists_on_pkpdb(idcode):
-    results = df_pkpdb_pkas.query(f"idcode == '{idcode}'")
+    results = df_pkpdb_pkas.query(f"idcode == '{idcode.lower()}'")
     if len(results) > 0:
         results = True
     else:
@@ -177,12 +212,17 @@ def exists_on_pkpdb(idcode):
     return response
 
 
-def run_pKAI(pdb):
-    results = pKAI(pdb, model_name="pKAI", device="cpu", threads=2)
-    return [[i[0], i[2], i[1], i[3]] for i in results]
+def run_pKAI(pdb, model):
+    results = pKAI(pdb, model_name=model, device="cpu", threads=2)
+    results = [[i[0], i[2], i[1], i[3]] for i in results]
+    results = exclude_cys(pdb, results)
+    tit_x, tit_y = pkas_2_titcurve(pdb, results)
+    pI = titcurve_2_pI(tit_x, tit_y)
+    return {"pKas": results, "tit_x": tit_x, "tit_y": tit_y, "pI": round(pI, 2)}
 
 
 @app.route("/pKAI/<idcode>", methods=["GET", "POST"])
+@limiter.limit("100 per hour")
 def run_pKAI_idcode(idcode):
 
     subID = get_subID(request)
@@ -195,7 +235,7 @@ def run_pKAI_idcode(idcode):
     else:
         newfilename = save_pdb(pdb_content, subID)
 
-        results = run_pKAI(newfilename)
+        results = run_pKAI(newfilename, "pKAI")
 
     response = jsonify(results)
     response.headers.add("Access-Control-Allow-Origin", "*")
@@ -203,6 +243,7 @@ def run_pKAI_idcode(idcode):
 
 
 @app.route("/pkas/<idcode>", methods=["GET", "POST"])
+@limiter.limit("100 per hour")
 def get_pkas_from_idcode(idcode):
     idcode = idcode.lower()
     subID = get_subID(request)
@@ -219,10 +260,15 @@ def get_pkas_from_idcode(idcode):
             "method": "PypKa (pKPDB)",
             "pdb": f"https://files.rcsb.org/download/{idcode}.pdb",
             "pI": df_pkpdb_pI.query(f"idcode == '{idcode}'").values.tolist()[0][2],
-            "pKs": results_list,
-            "tit_curve": json.loads(
-                df_pkpdb_titcurves.query(f"idcode == '{idcode}'").values.tolist()[0][2]
-            ),
+            "pKas": results_list,
+            "tit_curve": {
+                key: round(value, 2)
+                for key, value in json.loads(
+                    df_pkpdb_titcurves.query(f"idcode == '{idcode}'").values.tolist()[
+                        0
+                    ][2]
+                ).items()
+            },
         }
         return jsonify(response_dict)
 
@@ -244,13 +290,16 @@ def get_pkas_from_idcode(idcode):
 
     try:
         # Run pKAI
-        results_list = run_pKAI(newfilename)
+        results = run_pKAI(newfilename, "pKAI")
         response_dict = {
             "idcode": idcode.upper(),
-            "method": "pKAI 1.0",
+            "method": "pKAI 1.2.0",
             "pdb": f"https://alphafold.ebi.ac.uk/files/AF-{idcode_upper}-F1-model_v4.pdb",
-            "pKs": results_list,
+            **results,
+            "tit_curve": {x: y for x, y in zip(results["tit_x"], results["tit_y"])},
         }
+        del response_dict["tit_x"]
+        del response_dict["tit_y"]
     except Exception as e:
         response_dict = {"idcode": idcode, "Error": str(e)}
         return jsonify(response_dict)
@@ -299,6 +348,7 @@ def get_pkas_from_idcode(idcode):
 
 
 @app.route("/queue-size")
+@limiter.limit("5000 per hour")
 def get_queue_size():
     # response = jsonify(len(job_queue))
     response = jsonify(0)
@@ -442,20 +492,24 @@ def submitCalculation():
     else:
         pH = str(outputfilepH)
 
-    if model == "pkai":
-        results = run_pKAI(newfilename)
-        results = exclude_cys(newfilename, results)
-        tit_x, tit_y = pkas_2_titcurve(newfilename, results)
-        pI = titcurve_2_pI(tit_x, tit_y)
-        response = jsonify(
-            {
-                "pKas": results,
-                "tit_x": tit_x,
-                "tit_y": tit_y,
-                "pI": round(pI, 2),
-                "params": pformat(PKPDB_PARAMS),
-            }
-        )
+    if model in ("pKAI", "pKAI+"):
+        tmp_f = f"{dir_path}/pdbs/{subID}_cleaned.pdb"
+        clean_pdb(newfilename, tmp_f)
+        newfilename = tmp_f
+
+        results = run_pKAI(newfilename, model)
+
+        if outputfile:
+            pkas_2_pdb(
+                subID,
+                newfilename,
+                f"{dir_path}/pdbs_out/out_{subID}.pdb",
+                outputfilepH,
+                outputfilenaming,
+                results,
+            )
+            results["pdb_out"] = True
+        response = jsonify({"subID": subID, **results, "params": pformat(PKPDB_PARAMS)})
         response.headers.add("Access-Control-Allow-Origin", "*")
         return response
 
@@ -477,6 +531,7 @@ def submitCalculation():
             "pbc_dimensions": 0,
             "ncpus": 32,
             "clean": True,
+            "keep_ions": True,
             "ser_thr_titration": False,
             "titration_output": f"{dir_path}/titrations/titration_{subID}.out",
             "output": f"{dir_path}/pkas/pKas_{subID}.out",
@@ -574,6 +629,7 @@ def get_submission():
 
 
 @app.route("/getFile", methods=["GET", "POST"])
+@limiter.limit("50 per hour")
 def get_file():
     subID = request.json["subID"]
     ftype = request.json["file_type"]
