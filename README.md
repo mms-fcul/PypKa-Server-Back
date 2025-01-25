@@ -9,12 +9,24 @@
 - [Installation](#installation)
 - [Usage](#usage)
 - [Files](#files)
-- [Contributing](#contributing)
 - [License](#license)
 - [Contact](#contact)
 
 ## Description
-PypKa-Server-Back is a backend server for the PypKa project.
+PypKa-Server-Back is a backend server for the [PypKa website](https://pypka.org). If you use this software in your research, please cite its [paper](https://academic.oup.com/nar/article/52/W1/W294/7645774):
+
+@article{10.1093/nar/gkae255,
+    author = {Reis, Pedro B P S and Clevert, Djork-Arné and Machuqueiro, Miguel},
+    title = {PypKa server: online pKa predictions and biomolecular structure preparation with precomputed data from PDB and AlphaFold DB},
+    journal = {Nucleic Acids Research},
+    volume = {52},
+    number = {W1},
+    pages = {W294-W298},
+    year = {2024},
+    month = {04},
+    issn = {0305-1048},
+    doi = {10.1093/nar/gkae255}
+}
 
 ## Installation
 ```sh
@@ -48,11 +60,8 @@ python3 server/results_stream.py  # Starts the Fastapi api
 - `server/slurm.py`: SLURM job scheduling and management
 - `server/results_stream.py`: FastAPI result streaming
 
-## Contributing
-Contributions are welcome! Please read the [contributing guidelines](CONTRIBUTING.md) first.
-
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Contact
-For questions or issues, please open an issue on GitHub or contact [your-email@example.com](mailto:your-email@example.com).
+For questions or issues, please open an issue on GitHub or contact [pedroreis@campus.ul.pt](mailto:pedroreis@campus.ul.pt).
