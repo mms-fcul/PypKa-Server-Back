@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from sse_starlette.sse import EventSourceResponse
 from fastapi.middleware.cors import CORSMiddleware
 import subprocess
-from database import db_session
+from database import DB_SESSION
 from models import Job, Results, Residue, Pk, Input, Protein
 from pprint import pformat
 import json
@@ -31,7 +31,7 @@ app.add_middleware(
 
 STREAM_DELAY = 1  # second
 
-dir_path = os.path.dirname(os.path.realpath(__file__))
+DIR_PATH = os.path.dirname(os.path.realpath(__file__))
 
 
 @app.get("/")
@@ -47,7 +47,7 @@ async def message_stream(request: Request, subID: str):
         # subID = str(subID)
         print(f"RECEIVED {subID}")
 
-        with db_session() as session:
+        with DB_SESSION() as session:
             print(f"STARTED {subID}")
             job_id = session.query(Job.job_id).filter_by(sub_id=subID).first()
 
@@ -169,7 +169,7 @@ async def message_stream(request: Request, subID: str):
                         "status": "success",
                     }
 
-        logpath = f"{dir_path}/submissions/{subID}.out"
+        logpath = f"{DIR_PATH}/submissions/{subID}.out"
         # logpath = f"/tmp/tmp_{subID}/LOG_{subID}"
         print("showing", logpath)
 

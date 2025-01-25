@@ -3,7 +3,7 @@ import tornado.websocket
 import subprocess
 import os
 import sys
-from database import db_session
+from database import DB_SESSION
 from models import Job, Results, Residue, Pk, Input, Protein
 import logging
 from pprint import pformat
@@ -12,7 +12,7 @@ logging.basicConfig(filename="socket.log", level=logging.DEBUG)
 
 import json
 
-dir_path = os.path.dirname(os.path.realpath(__file__))
+DIR_PATH = os.path.dirname(os.path.realpath(__file__))
 
 
 class EchoWebSocket(tornado.websocket.WebSocketHandler):
@@ -24,7 +24,7 @@ class EchoWebSocket(tornado.websocket.WebSocketHandler):
 
         print(f"RECEIVED {subID}")
 
-        with db_session() as session:
+        with DB_SESSION() as session:
             print(f"STARTED {subID}")
             job_id = session.query(Job.job_id).filter_by(sub_id=subID).first()
 
@@ -156,7 +156,7 @@ class EchoWebSocket(tornado.websocket.WebSocketHandler):
                     )
                     return
 
-        logpath = f"{dir_path}/submissions/{subID}.out"
+        logpath = f"{DIR_PATH}/submissions/{subID}.out"
         # logpath = f"/tmp/tmp_{subID}/LOG_{subID}"
         print("showing", logpath)
 

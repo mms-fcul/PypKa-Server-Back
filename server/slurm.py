@@ -7,11 +7,11 @@ import datetime
 from pypka import Titration
 from pypka import __version__ as pypka_version
 from models import Residue, Results, Pk, Input, Job
-from database import db_session
+from database import DB_SESSION
 from dotenv import dotenv_values
 
-dir_path = os.path.dirname(os.path.realpath(__file__))
-config = dotenv_values(f"{dir_path}/../.env")
+DIR_PATH = os.path.dirname(os.path.realpath(__file__))
+CONFIG = dotenv_values(f"{DIR_PATH}/../.env")
 
 logging.basicConfig(filename="server.log", level=logging.DEBUG)
 
@@ -76,7 +76,7 @@ def run_pypka(parameters, subID, get_params=False):
 
 def report_error(job_id, error_msg, pid):
     logging.info(f"LOGGING ERROR of jobid #{job_id}")
-    with db_session() as session:
+    with DB_SESSION() as session:
         new_results = Results(
             job_id=job_id,
             error=error_msg,
@@ -101,7 +101,7 @@ def run_pypka_job(job_params, subID, job_id, pid):
 
     pdb_out = None
     if "structure_output" in job_params and not response_dict["error"]:
-        with open(f"{dir_path}/pdbs_out/out_{subID}.pdb") as f:
+        with open(f"{DIR_PATH}/pdbs_out/out_{subID}.pdb") as f:
             pdb_out = f.read()
     response_dict["pdb_out"] = pdb_out
 
@@ -144,14 +144,14 @@ def run_pypka_job(job_params, subID, job_id, pid):
         pb_set=delphi_params,
         mc_set=mc_params,
     )
-    db_session.add(new_input)
-    db_session.commit()
+    DB_SESSION.add(new_input)
+    DB_SESSION.commit()
 
     logging.info(f'inserting {response_dict["pKas"]} pKa values')
 
     for chain, res_name, res_number, pK in response_dict["pKas"]:
         resid = (
-            db_session.query(Residue.res_id)
+            DB_SESSION.query(Residue.res_id)
             .filter(Residue.protein_id == pid)
             .filter(Residue.res_name == res_name)
             .filter(Residue.chain == chain)
@@ -167,14 +167,14 @@ def run_pypka_job(job_params, subID, job_id, pid):
                 chain=chain,
                 res_number=res_number,
             )
-            db_session.add(new_residue)
-            db_session.commit()
+            DB_SESSION.add(new_residue)
+            DB_SESSION.commit()
             resid = new_residue.res_id
         if pK == "-":
             pK = None
         new_pk = Pk(job_id=job_id, res_id=resid, pk=pK)
-        db_session.add(new_pk)
-        db_session.commit()
+        DB_SESSION.add(new_pk)
+        DB_SESSION.commit()
 
     logging.info(f"inserting Results")
 
@@ -189,28 +189,28 @@ def run_pypka_job(job_params, subID, job_id, pid):
         pdb_out=response_dict["pdb_out"],
         pdb_out_ph=pdb_out_ph,
     )
-    db_session.add(new_results)
-    db_session.commit()
+    DB_SESSION.add(new_results)
+    DB_SESSION.commit()
 
-    job = db_session.query(Job).filter(Job.job_id == job_id).first()
+    job = DB_SESSION.query(Job).filter(Job.job_id == job_id).first()
     job.dat_time_finish = datetime.datetime.today()
-    db_session.commit()
+    DB_SESSION.commit()
 
     # if outputemail:
     #    send_email(outputemail)
 
-    db_session.close()
+    DB_SESSION.close()
 
     logging.info(f"{subID} exiting")
 
 
 def create_slurm_file(params, subID, job_id, pid):
-    slurm_f = f"{dir_path}/submissions/slurm_{subID}.py"
+    slurm_f = f"{DIR_PATH}/submissions/slurm_{subID}.py"
     with open(slurm_f, "w") as f:
         f.write(
-            f"""#! {config["PYTHON_PYPKA"]}
+            f"""#! {CONFIG["PYTHON_PYPKA"]}
 import sys
-sys.path.append("{dir_path}")
+sys.path.append("{DIR_PATH}")
 from slurm import run_pypka_job
 
 run_pypka_job({params}, {subID}, {job_id}, {pid})
@@ -223,13 +223,13 @@ run_pypka_job({params}, {subID}, {job_id}, {pid})
     while in_queue:
         sleep(5)
         sbrun = subprocess.run(
-            f"{config['SID']} | grep {subID} | wc -l",
+            f"{CONFIG['SID']} | grep {subID} | wc -l",
             shell=True,
             capture_output=True,
         )
         in_queue = int(sbrun.stdout.decode("utf-8").strip())
 
-    with db_session() as session:
+    with DB_SESSION() as session:
         has_reported = (
             session.query(Results.job_id).filter(Results.job_id == job_id).all()
         )
@@ -241,7 +241,7 @@ run_pypka_job({params}, {subID}, {job_id}, {pid})
 
 def check_idle_machines():
     sbrun = subprocess.run(
-        config["SHOSTS"],  # "clues status | grep idle | wc -l",
+        CONFIG["SHOSTS"],  # "clues status | grep idle | wc -l",
         shell=True,
         capture_output=True,
     )
@@ -254,13 +254,13 @@ def check_idle_machines():
 def submit_job(
     job_name,
     job_script,
-    ncores=config["SLURM_JOB_NCORES"],
-    partitions=config["SLURM_PARTITIONS"],
+    ncores=CONFIG["SLURM_JOB_NCORES"],
+    partitions=CONFIG["SLURM_PARTITIONS"],
 ):
     n_machines_idling = check_idle_machines()
     logging.info(f"MACHINES IDLE: {n_machines_idling}")
 
-    cmd = f"sbatch -p {partitions} -N 1 -n {ncores} -t 240 -o {dir_path}/submissions/{job_name}.out -e {dir_path}/submissions/{job_name}.out {job_script}"
+    cmd = f"sbatch -p {partitions} -N 1 -n {ncores} -t 240 -o {DIR_PATH}/submissions/{job_name}.out -e {DIR_PATH}/submissions/{job_name}.out {job_script}"
     logging.info(cmd)
 
     # os.system(cmd)
@@ -298,7 +298,7 @@ def submit_job_CESGA(job_name, job_script, ncores=16, partitions="debug"):
             n_machines_idling = check_idle_machines()
         logging.info(f"MACHINES IDLE: {n_machines_idling}")
 
-    cmd = f"sbatch -p {partitions} -N 1 -n {ncores} -t 240 -o {dir_path}/submissions/{job_name}.out -e {dir_path}/submissions/{job_name}.out {job_script}"
+    cmd = f"sbatch -p {partitions} -N 1 -n {ncores} -t 240 -o {DIR_PATH}/submissions/{job_name}.out -e {DIR_PATH}/submissions/{job_name}.out {job_script}"
     logging.info(cmd)
 
     # os.system(cmd)
@@ -319,12 +319,6 @@ def submit_job_CESGA(job_name, job_script, ncores=16, partitions="debug"):
         )
         in_queue = int(sbrun.stdout.decode("utf-8").strip())
 
-    if not os.path.isfile(f"{dir_path}/submissions/{job_name}.out"):
+    if not os.path.isfile(f"{DIR_PATH}/submissions/{job_name}.out"):
         logging.info(f"RESUBMITTING {job_name}")
         submit_job(job_name, job_script, ncores=16, partitions="debug")
-
-
-if __name__ == "__main__":
-    print(check_idle_machines())
-    create_slurm_file(params, subID, job_id, pid)
-    submit_job("testing", "slurm_20231122133015680635449023098672727497.py")

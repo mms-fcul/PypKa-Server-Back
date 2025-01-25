@@ -1,9 +1,9 @@
 from sqlalchemy import Column, Integer, Date, CHAR, JSON, Time, Text, VARCHAR, REAL
 from sqlalchemy import ForeignKeyConstraint, UniqueConstraint
-from database import Base
+from database import BASE
 
 
-class Input(Base):
+class Input(BASE):
     __tablename__ = "input"
 
     input_id = Column(Integer, primary_key=True)
@@ -16,7 +16,7 @@ class Input(Base):
     ForeignKeyConstraint(["protein_id"], ["protein.protein_id"])
 
 
-class Job(Base):
+class Job(BASE):
     __tablename__ = "job"
 
     job_id = Column(Integer, primary_key=True)
@@ -28,7 +28,8 @@ class Job(Base):
     country = Column(Text)
     city = Column(Text)
 
-class Pk(Base):
+
+class Pk(BASE):
     __tablename__ = "pk"
 
     pk_id = Column(Integer, primary_key=True)
@@ -39,7 +40,7 @@ class Pk(Base):
     ForeignKeyConstraint(["res_id"], ["residue.res_id"])
 
 
-class Protein(Base):
+class Protein(BASE):
     __tablename__ = "protein"
 
     protein_id = Column(Integer, primary_key=True)
@@ -49,7 +50,7 @@ class Protein(Base):
     pdb_file = Column(JSON, nullable=False)
 
 
-class Residue(Base):
+class Residue(BASE):
     __tablename__ = "residue"
 
     res_id = Column(Integer, primary_key=True)
@@ -60,7 +61,7 @@ class Residue(Base):
     ForeignKeyConstraint(["protein_id"], ["protein.protein_id"])
 
 
-class Results(Base):
+class Results(BASE):
     __tablename__ = "results"
 
     results_id = Column(Integer, primary_key=True)
@@ -73,7 +74,7 @@ class Results(Base):
     ForeignKeyConstraint(["job_id"], ["job.job_id"])
 
 
-class UsageStats(Base):
+class UsageStats(BASE):
     __tablename__ = "usage_stats"
 
     usid = Column(Integer, primary_key=True)

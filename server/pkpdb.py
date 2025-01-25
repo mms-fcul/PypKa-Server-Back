@@ -2,10 +2,10 @@ import os
 from dotenv import dotenv_values
 import importlib.util
 
-dir_path = os.path.dirname(os.path.realpath(__file__))
-config = dotenv_values(f"{dir_path}/../.env")
+DIR_PATH = os.path.dirname(os.path.realpath(__file__))
+CONFIG = dotenv_values(f"{DIR_PATH}/../.env")
 
-spec = importlib.util.spec_from_file_location("pkpdb", config["PKPDB"])
+spec = importlib.util.spec_from_file_location("pkpdb", CONFIG["PKPDB"])
 pkpdb = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pkpdb)
 
