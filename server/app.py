@@ -98,6 +98,11 @@ def plus_one_pypka_subs():
     usage.pypka_subs += 1
     db_session.commit()
 
+def plus_one_pkai_subs():
+    usage = db_session.query(UsageStats).first()
+    usage.pkai_subs += 1
+    db_session.commit()
+
 
 @app.route("/stats")
 def get_stats():
@@ -238,6 +243,7 @@ def exists_on_pkpdb(idcode):
 
 
 def run_pKAI(pdb, model):
+    plus_one_pkai_subs()
     results = pKAI(pdb, model_name=model, device="cpu", threads=2)
     results = [[i[0], i[2], i[1], i[3]] for i in results]
     results = exclude_cys(pdb, results)
@@ -249,6 +255,7 @@ def run_pKAI(pdb, model):
 @app.route("/pKAI/<idcode>", methods=["GET", "POST"])
 @limiter.limit("100 per hour")
 def run_pKAI_idcode(idcode):
+    plus_one_pkai_subs()
     subID = get_subID(request)
 
     r = requests.get(f"https://files.rcsb.org/download/{idcode}.pdb")
@@ -476,6 +483,12 @@ def getSubID():
 
 @app.route("/submitSim", methods=["POST"])
 def submitCalculation():
+    # Get IP, country, and city information
+    ip = request.remote_addr
+    location_info = requests.get(f"https://ipinfo.io/{ip}/json").json()
+    country = location_info.get("country", "Unknown")
+    city = location_info.get("city", "Unknown")
+
     pdbfile = request.json["pdbfile"]
     pdbid = request.json["pdbcode"]
 
@@ -565,7 +578,7 @@ def submitCalculation():
                 outputfilenaming,
             )
 
-        sub_parameters = (pdbid, pdbfile, outputemail, nsites, nchains)
+        sub_parameters = (pdbid, pdbfile, outputemail, nsites, nchains, ip, country, city)        
 
         Thread(
             target=submit_pypka_job,
@@ -585,9 +598,9 @@ def submitCalculation():
 def submit_pypka_job(job_params, sub_params, subID):
     plus_one_pypka_subs()
 
-    pdbid, pdbfile, outputemail, nsites, nchains = sub_params
+    pdbid, pdbfile, outputemail, nsites, nchains, ip, country, city = sub_params
     cur_date = datetime.datetime.today()
-    new_job = Job(dat_time=cur_date, email=outputemail, sub_id=subID)
+    new_job = Job(dat_time=cur_date, email=outputemail, sub_id=subID, ip=ip, country=country, city=city)
     db_session.add(new_job)
     db_session.commit()
 
@@ -613,7 +626,6 @@ def submit_pypka_job(job_params, sub_params, subID):
     job_id = new_job.job_id
     db_session.close()
     create_slurm_file(job_params, subID, job_id, pid)
-
 
 @app.route("/getSubmissions", methods=["POST", "GET"])
 def get_submission():

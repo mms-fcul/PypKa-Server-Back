@@ -1,7 +1,3 @@
-.PHONY: help check-queue
-.DEFAULT_GOAL := help
-SHELL := /bin/bash
-
 define PRINT_HELP_PYSCRIPT
 import re, sys
 
@@ -21,17 +17,15 @@ endif
 help:  ## get help
 	@python -c "$$PRINT_HELP_PYSCRIPT" < $(MAKEFILE_LIST)
 
-check-queue: ## check queue size
-	python3 -c "import redis; redis_conn = redis.from_url('redis://localhost:6379'); print(redis_conn.llen('queue'))"
-
-delete-queue: ## check queue size
-	python3 -c "import redis; redis_conn = redis.from_url('redis://localhost:6379'); print(redis_conn.delete('queue'))"
-
-pop-queue: ## check queue size
-	python3 -c "import redis; redis_conn = redis.from_url('redis://localhost:6379'); print(redis_conn.lpop('queue'))"	
-
 delete-job: ## delete job from database
 ifndef job_id
 	$(error job_id is not set)
 endif
 	psql -d pypkaserver -c "delete from job where job_id = $(job_id);"
+
+restart-services: ## restarts the services
+	sudo service pypka-api restart
+	sudo service pypka-fastapi restart
+	
+
+

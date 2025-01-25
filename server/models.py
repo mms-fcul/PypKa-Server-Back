@@ -24,7 +24,9 @@ class Job(Base):
     dat_time = Column(Date, nullable=False)
     dat_time_finish = Column(Date, nullable=False)
     email = Column(Text)
-
+    ip = Column(Text)
+    country = Column(Text)
+    city = Column(Text)
 
 class Pk(Base):
     __tablename__ = "pk"
