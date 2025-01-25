@@ -14,8 +14,8 @@ root.handlers = logging.getLogger().handlers
 root.setLevel(logging.INFO)
 
 from flask import Flask
-from direct_routes import direct_routes_bp, direct_routes_severelimit_bp
-from routes import routes_bp
+from routes_direct import direct_routes_bp, direct_routes_severelimit_bp
+from routes_website import routes_bp
 
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -25,8 +25,8 @@ app.config["SECRET_KEY"] = str(datetime.datetime.today())
 app.config["CORS_HEADERS"] = "Content-Type"
 
 app.register_blueprint(direct_routes_bp)
-app.register_blueprint(routes_bp)
 app.register_blueprint(direct_routes_severelimit_bp)
+app.register_blueprint(routes_bp)
 
 limiter = Limiter(
     get_remote_address,

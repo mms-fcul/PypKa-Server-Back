@@ -13,7 +13,7 @@ from pka2pI import pkas_2_pdb, clean_pdb
 from database import DB_SESSION
 from models import Job, Protein, Input, Results
 from const import PKPDB_PARAMS, DIR_PATH, CONFIG
-from direct_routes import pkpdb_query, save_pdb
+from routes_direct import pkpdb_query, save_pdb
 from utils import submit_pypka_job, get_subID, run_pKAI
 
 routes_bp = Blueprint("routes", __name__)

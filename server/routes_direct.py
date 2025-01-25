@@ -19,7 +19,7 @@ from utils import (
 )
 
 direct_routes_bp = Blueprint("direct_routes", __name__)
-direct_routes_severelimit_bp = Blueprint("direct_routes", __name__)
+direct_routes_severelimit_bp = Blueprint("direct_routes_severelimit", __name__)
 
 
 @direct_routes_bp.route("/stats")
