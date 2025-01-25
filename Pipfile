@@ -33,7 +33,10 @@ flask = {extras = ["async"], version = "*"}
 fastapi = {extras = ["all"], version = "*"}
 flask-sse = "*"
 uvicorn = "*"
-flask_limiter = "*"
+pipfile = "*"
+pandas = "*"
+scipy = "*"
+flask-limiter = "*"
 
 [dev-packages]
 

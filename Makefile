@@ -29,3 +29,9 @@ delete-queue: ## check queue size
 
 pop-queue: ## check queue size
 	python3 -c "import redis; redis_conn = redis.from_url('redis://localhost:6379'); print(redis_conn.lpop('queue'))"	
+
+delete-job: ## delete job from database
+ifndef job_id
+	$(error job_id is not set)
+endif
+	psql -d pypkaserver -c "delete from job where job_id = $(job_id);"

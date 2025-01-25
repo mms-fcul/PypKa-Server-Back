@@ -23,5 +23,21 @@ sudo systemctl restart redis.service
 ```
 
 ## Run
-    export FLASK_APP=app.py
-    flask run
+    python3 server/app.py
+
+## Files
+    - app.py: Main flask backend
+      database.py  
+      models.py
+      pka2pI.py
+      slurm.py
+
+    - new.py: fastapi result streaming
+
+      
+
+    - OLD: 
+      __main__.py
+      pkpdb.py
+      stream.py
+      job_queue.py       

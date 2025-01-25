@@ -8,12 +8,12 @@ from pypka import Titration
 from pypka import __version__ as pypka_version
 from models import Residue, Results, Pk, Input, Job
 from database import db_session
+from dotenv import dotenv_values
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
+config = dotenv_values(f"{dir_path}/../.env")
 
-logging.basicConfig(
-    filename="/home/pedror/PypKa-Server-Back/server/server.log", level=logging.DEBUG
-)
+logging.basicConfig(filename="server.log", level=logging.DEBUG)
 
 root = logging.getLogger("werkzeug")
 root.handlers = logging.getLogger().handlers
@@ -149,7 +149,7 @@ def run_pypka_job(job_params, subID, job_id, pid):
 
     logging.info(f'inserting {response_dict["pKas"]} pKa values')
 
-    for (chain, res_name, res_number, pK) in response_dict["pKas"]:
+    for chain, res_name, res_number, pK in response_dict["pKas"]:
         resid = (
             db_session.query(Residue.res_id)
             .filter(Residue.protein_id == pid)
@@ -208,7 +208,7 @@ def create_slurm_file(params, subID, job_id, pid):
     slurm_f = f"{dir_path}/submissions/slurm_{subID}.py"
     with open(slurm_f, "w") as f:
         f.write(
-            f"""#! /home/pedror/miniconda3/envs/pypka/bin/python3
+            f"""#! {config["PYTHON_PYPKA"]}
 import sys
 sys.path.append("{dir_path}")
 from slurm import run_pypka_job
@@ -219,27 +219,60 @@ run_pypka_job({params}, {subID}, {job_id}, {pid})
 
     submit_job(subID, slurm_f)
 
+    in_queue = True
+    while in_queue:
+        sleep(5)
+        sbrun = subprocess.run(
+            f"{config['SID']} | grep {subID} | wc -l",
+            shell=True,
+            capture_output=True,
+        )
+        in_queue = int(sbrun.stdout.decode("utf-8").strip())
+
     with db_session() as session:
         has_reported = (
             session.query(Results.job_id).filter(Results.job_id == job_id).all()
         )
         logging.info(f"{subID} has reported: {has_reported}")
         if not has_reported:
-            error_msg = f"Job cancelled due to time limit"
+            error_msg = "Job cancelled due to time limit"
             report_error(job_id, error_msg, pid)
 
 
 def check_idle_machines():
     sbrun = subprocess.run(
-        "clues status | grep idle | wc -l",
+        config["SHOSTS"],  # "clues status | grep idle | wc -l",
         shell=True,
         capture_output=True,
     )
-    n_machines_idling = int(sbrun.stdout.decode("utf-8").strip())
+    # n_machines_idling = int(sbrun.stdout.decode("utf-8").strip())
+    last_shosts_line = sbrun.stdout.decode("utf-8").strip().splitlines()[-1]
+    n_machines_idling = int(last_shosts_line.split("IDLE:")[1].strip().split()[0])
     return n_machines_idling
 
 
-def submit_job(job_name, job_script, ncores=16, partitions="debug"):
+def submit_job(
+    job_name,
+    job_script,
+    ncores=config["SLURM_JOB_NCORES"],
+    partitions=config["SLURM_PARTITIONS"],
+):
+    n_machines_idling = check_idle_machines()
+    logging.info(f"MACHINES IDLE: {n_machines_idling}")
+
+    cmd = f"sbatch -p {partitions} -N 1 -n {ncores} -t 240 -o {dir_path}/submissions/{job_name}.out -e {dir_path}/submissions/{job_name}.out {job_script}"
+    logging.info(cmd)
+
+    # os.system(cmd)
+    sbrun = subprocess.run(
+        cmd,
+        shell=True,
+        capture_output=True,
+    )
+    logging.info(f'SLURM SUBMISSION -> {sbrun.stdout.decode("utf-8").strip()}')
+
+
+def submit_job_CESGA(job_name, job_script, ncores=16, partitions="debug"):
     n_machines_idling = check_idle_machines()
     logging.info(f"MACHINES IDLE: {n_machines_idling}")
 
@@ -289,3 +322,9 @@ def submit_job(job_name, job_script, ncores=16, partitions="debug"):
     if not os.path.isfile(f"{dir_path}/submissions/{job_name}.out"):
         logging.info(f"RESUBMITTING {job_name}")
         submit_job(job_name, job_script, ncores=16, partitions="debug")
+
+
+if __name__ == "__main__":
+    print(check_idle_machines())
+    create_slurm_file(params, subID, job_id, pid)
+    submit_job("testing", "slurm_20231122133015680635449023098672727497.py")

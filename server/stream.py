@@ -8,9 +8,7 @@ from models import Job, Results, Residue, Pk, Input, Protein
 import logging
 from pprint import pformat
 
-logging.basicConfig(
-    filename="/home/pedror/PypKa-Server-Back/server/socket.log", level=logging.DEBUG
-)
+logging.basicConfig(filename="socket.log", level=logging.DEBUG)
 
 import json
 

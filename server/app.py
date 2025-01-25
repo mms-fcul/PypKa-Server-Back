@@ -19,6 +19,7 @@ from models import Job, Protein, Input, UsageStats, Results
 
 from slurm import create_slurm_file
 from pka2pI import pkas_2_titcurve, titcurve_2_pI, exclude_cys, pkas_2_pdb, clean_pdb
+from pka2pI import pkas_2_titcurve, titcurve_2_pI, exclude_cys, pkas_2_pdb, clean_pdb
 
 from pkai.pKAI import pKAI
 
@@ -28,10 +29,11 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 
-
 import pandas as pd
 
-df_pkpdb_pkas = pd.read_csv("static/pkas.csv", header=0, sep=";") # , compression="gzip"
+df_pkpdb_pkas = pd.read_csv(
+    "static/pkas.csv", header=0, sep=";"
+)  # , compression="gzip"
 df_pkpdb_pI = pd.read_csv(
     "static/isoelectric.csv", header=0, sep=";" # , compression="gzip"
 )
@@ -43,9 +45,7 @@ Base.metadata.create_all(bind=engine)
 
 STATUS = "live"
 
-logging.basicConfig(
-    filename="/home/pedror/PypKa-Server-Back/server/server.log", level=logging.DEBUG
-)
+logging.basicConfig(filename="server.log", level=logging.DEBUG)
 
 root = logging.getLogger("werkzeug")
 root.handlers = logging.getLogger().handlers
@@ -59,6 +59,13 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 config = dotenv_values(f"{dir_path}/../.env")
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["500 per hour"],
+    storage_uri="memory://",
+)
 
 limiter = Limiter(
     get_remote_address,
@@ -99,6 +106,7 @@ def get_stats():
         UsageStats.pkpdb_downloads,
         UsageStats.pypka_subs,
         UsageStats.pKAI_subs,
+        UsageStats.pKAI_subs,
     ).first()
 
     response_dict = {
@@ -115,18 +123,26 @@ def get_stats():
 
 @app.route("/isoelectric.csv")
 @limiter.limit("10 per hour")
+@app.route("/isoelectric.csv")
+@limiter.limit("10 per hour")
 def export_pis():
     plus_one_pkpdb_downloads()
+    return app.send_static_file("isoelectric.csv")
     return app.send_static_file("isoelectric.csv")
 
 
 @app.route("/pkas.csv")
 @limiter.limit("10 per hour")
+@app.route("/pkas.csv")
+@limiter.limit("10 per hour")
 def export_pkas():
     plus_one_pkpdb_downloads()
     return app.send_static_file("pkas.csv")
+    return app.send_static_file("pkas.csv")
 
 
+@app.route("/similarity090.csv")
+@limiter.limit("10 per hour")
 @app.route("/similarity090.csv")
 @limiter.limit("10 per hour")
 def export_clusters():
@@ -139,15 +155,23 @@ def export_clusters():
 def test():
     return jsonify({"status": "live"})
 
+
+@app.route("/test")
+@limiter.limit("2 per hour")
+def test():
+    return jsonify({"status": "live"})
+
 @app.route("/")
+@limiter.limit("100 per hour")
 @limiter.limit("100 per hour")
 def hello():
     status = "live"
     if STATUS:
         status = STATUS
-    return jsonify({
-        "status": status,
-        "endpoints": """
+    return jsonify(
+        {
+            "status": status,
+            "endpoints": """
         /pkas/<idcode>     GET/POST    Retrieves the results from the pKPDB if available, and runs a pKAI calculation otherwise
                            Example: https://api.pypka.org/pkas/4LZT
         
@@ -157,7 +181,8 @@ def hello():
         /pKAI/<idcode>     GET/POST    Runs a pKAI calculation
                            Example: https://api.pypka.org/pkpdb/4LZT
         """,
-    })
+        }
+    )
 
 
 @app.route("/query/<idcode>")
@@ -224,7 +249,6 @@ def run_pKAI(pdb, model):
 @app.route("/pKAI/<idcode>", methods=["GET", "POST"])
 @limiter.limit("100 per hour")
 def run_pKAI_idcode(idcode):
-
     subID = get_subID(request)
 
     r = requests.get(f"https://files.rcsb.org/download/{idcode}.pdb")
@@ -411,7 +435,6 @@ def get_subID(request):
 
 @app.route("/getTitrableSitesNumber", methods=["POST"])
 def getNumberOfTitratableSites():
-
     pdbfile = request.json["PDB"]
 
     subID = get_subID(request)
@@ -443,7 +466,6 @@ def getNumberOfTitratableSites():
 
 @app.route("/getSubID", methods=["POST"])
 def getSubID():
-
     subID = get_subID(request)
 
     response = jsonify({"subID": subID})
@@ -454,7 +476,6 @@ def getSubID():
 
 @app.route("/submitSim", methods=["POST"])
 def submitCalculation():
-
     pdbfile = request.json["pdbfile"]
     pdbid = request.json["pdbcode"]
 
@@ -529,7 +550,7 @@ def submitCalculation():
             "scaleM": 2,
             "convergence": 0.1,
             "pbc_dimensions": 0,
-            "ncpus": 32,
+            "ncpus": config["SLURM_JOB_NCORES"],
             "clean": True,
             "keep_ions": True,
             "ser_thr_titration": False,
